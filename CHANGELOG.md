@@ -11,7 +11,7 @@ _Nothing yet. Future changes land here._
 
 ## [1.0.0] - 2026-05-17
 
-Initial public release. Implements protocol `schema_version` 1 with full schema validation, normalization, idempotency helpers, and WebDAV envelope utilities. See [`docs/dayglance-intent-protocol.md`](./docs/dayglance-intent-protocol.md) for the protocol spec this package implements.
+Initial public release. Implements protocol `schema_version` 1 with full schema validation, normalization, idempotency helpers, and WebDAV envelope utilities. See `dayglance-intent-protocol.md` for the protocol spec this package implements.
 
 ### Added
 
