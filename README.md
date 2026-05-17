@@ -7,8 +7,8 @@ The package provides Zod schemas, normalizers, idempotency helpers, and WebDAV e
 ## Installation
 
 ```sh
-pnpm add @glance-apps/intents
-# or: npm install @glance-apps/intents
+npm install @glance-apps/intents
+# or: pnpm add @glance-apps/intents
 # or: yarn add @glance-apps/intents
 ```
 
