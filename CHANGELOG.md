@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
-## [1.0.0] - 2026-05-17
+## [1.0.1] - 2026-05-17
+
+1.0.0 was published with a build pipeline gap — the tarball did not include compiled output. 1.0.1 is the first usable release; its content matches the intended scope of 1.0.0. A `prepublishOnly` script now guards against recurrence.
 
 Initial public release. Implements protocol `schema_version` 1 with full schema validation, normalization, idempotency helpers, and WebDAV envelope utilities. See `dayglance-intent-protocol.md` for the protocol spec this package implements.
 
