@@ -6,11 +6,13 @@ import {
   EVENTS,
   PRIORITY,
   PRIORITY_ALIASES,
+  QUERY_RETURN_VARS,
   RETURN_VARS,
   RETURN_VAR_TYPES,
   SCHEMA_VERSION,
   SOURCE_APPS,
   TABS,
+  UNIVERSAL_RETURN_VARS,
   UPDATED_FIELDS,
   type Action,
   type AndroidAction,
@@ -99,6 +101,30 @@ describe('RETURN_VARS', () => {
     const declared = Object.values(RETURN_VARS).sort();
     const typed = Object.keys(RETURN_VAR_TYPES).sort();
     expect(typed).toEqual(declared);
+  });
+
+  it('QUERY_RETURN_VARS holds the 10 query-action variables', () => {
+    expect(Object.values(QUERY_RETURN_VARS)).toHaveLength(10);
+  });
+
+  it('UNIVERSAL_RETURN_VARS holds the 4 inbound-action variables', () => {
+    expect(Object.values(UNIVERSAL_RETURN_VARS).sort()).toEqual([
+      '%dg_error',
+      '%dg_success',
+      '%dg_task_id',
+      '%dg_warning',
+    ]);
+  });
+
+  it('RETURN_VARS combines query and universal vars (14 total, no overlap)', () => {
+    const query = Object.values(QUERY_RETURN_VARS);
+    const universal = Object.values(UNIVERSAL_RETURN_VARS);
+    expect(Object.values(RETURN_VARS)).toHaveLength(query.length + universal.length);
+    for (const v of query) expect(universal).not.toContain(v);
+  });
+
+  it('SUCCESS is typed as boolean', () => {
+    expect(RETURN_VAR_TYPES[UNIVERSAL_RETURN_VARS.SUCCESS]).toBe('boolean');
   });
 });
 
