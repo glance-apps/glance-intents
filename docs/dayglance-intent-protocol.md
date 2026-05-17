@@ -22,7 +22,7 @@ WebDAV is the transport that makes "complete a chore on my phone while away from
 
 ## Status
 
-**In active implementation.** The protocol is being implemented via a shared package, `@glance-apps/intents`, following the `@glance-apps/sync` extraction pattern. Schema decisions are locked; see `glance-intents-package.md` for the package build plan.
+**In active implementation.** The protocol is being implemented via a shared package, `@glance-apps/intents`, following the `@glance-apps/sync` extraction pattern. Schema decisions are locked.
 
 The WebDAV event log is the v1 cross-app transport for the GLANCE family. lastGLANCE ships against it. Android intents are an optimization that ships when Tasker support ships; not on the critical path for GLANCE-family integration.
 
@@ -522,7 +522,7 @@ lastGLANCE must run usefully without dayGLANCE installed *and* without WebDAV co
 
 lifeGLANCE adopts the protocol for bidirectional Goal↔Milestone linking with dayGLANCE. Either app can originate the linked record: a user can create a milestone in lifeGLANCE and check "track as dayGLANCE Goal," or create a Goal in dayGLANCE and check "track in lifeGLANCE." Whichever side originates emits an outbound `create` to the other, with appropriate `source_app` provenance (`app.lifeglance` when lifeGLANCE owns the canonical record, dayGLANCE-native when dayGLANCE does). State changes flow via `notify`: date changes on either side propagate to the other; Goal completion in dayGLANCE marks the corresponding milestone as completed in lifeGLANCE.
 
-This consumer is planned for Phase 5 of the package build plan (`glance-intents-package.md`), after lifeGLANCE v1.7 (Android). The protocol itself supports the integration with no schema changes beyond the additions already in v1.0.0; the work is on each app's consumer side.
+This consumer is planned after lifeGLANCE v1.7 (Android). The protocol itself supports the integration with no schema changes beyond the additions already in v1.0.0; the work is on each app's consumer side.
 
 ---
 
@@ -552,7 +552,7 @@ The following were originally listed as open and have been locked:
 
 ## Build order
 
-The package and consumer implementations are sequenced in `glance-intents-package.md`. Summary:
+The package and consumer implementations follow this sequence:
 
 1. `@glance-apps/intents@1.0.0` is published as the shared package containing schemas, normalizers, idempotency helpers, and WebDAV envelope helpers.
 2. dayGLANCE consumes the package, implements the shared `handleIntent` handler, ships the WebDAV transport and outbound `notify` emission.
