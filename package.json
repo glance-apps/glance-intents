@@ -1,6 +1,6 @@
 {
   "name": "@glance-apps/intents",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Shared intent protocol for the GLANCE family of apps",
   "license": "MIT",
   "type": "module",
