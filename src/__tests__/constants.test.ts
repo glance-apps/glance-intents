@@ -65,21 +65,26 @@ describe('ENTITY_TYPES', () => {
 
 describe('PRIORITY', () => {
   it('maps each canonical alias to its numeric level', () => {
+    expect(PRIORITY_ALIASES.none).toBe(PRIORITY.NONE);
     expect(PRIORITY_ALIASES.low).toBe(PRIORITY.LOW);
-    expect(PRIORITY_ALIASES.normal).toBe(PRIORITY.NORMAL);
     expect(PRIORITY_ALIASES.medium).toBe(PRIORITY.MEDIUM);
     expect(PRIORITY_ALIASES.high).toBe(PRIORITY.HIGH);
-    expect(PRIORITY_ALIASES.urgent).toBe(PRIORITY.URGENT);
   });
 
-  it('uses 1..5 as the level range', () => {
-    expect(Object.values(PRIORITY).sort()).toEqual([1, 2, 3, 4, 5]);
+  it('uses 0..3 as the level range', () => {
+    expect(Object.values(PRIORITY).sort()).toEqual([0, 1, 2, 3]);
   });
 });
 
 describe('TABS', () => {
   it('includes the glance tab (target of the open action for query no-op)', () => {
     expect(TABS.GLANCE).toBe('glance');
+  });
+
+  it('lists the five v1 dayGLANCE tabs', () => {
+    expect(Object.values(TABS).sort()).toEqual(
+      ['glance', 'goals', 'inbox', 'settings', 'timeline'].sort(),
+    );
   });
 });
 

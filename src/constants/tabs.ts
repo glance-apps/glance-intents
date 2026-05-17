@@ -1,10 +1,8 @@
 export const TABS = {
   GLANCE: 'glance',
+  TIMELINE: 'timeline',
   INBOX: 'inbox',
-  TODAY: 'today',
-  UPCOMING: 'upcoming',
   GOALS: 'goals',
-  PROJECTS: 'projects',
   SETTINGS: 'settings',
 } as const;
 

@@ -9,6 +9,9 @@ export const RETURN_VARS = {
   IN_PROGRESS_REMAINING_MIN: '%dg_in_progress_remaining_min',
   NEXT_TITLE: '%dg_next_title',
   NEXT_TIME: '%dg_next_time',
+  // Populated by `complete` on ambiguous title match, not by `query`. Shares
+  // the return-variable namespace because Tasker-style transports surface
+  // all returned variables together regardless of which action set them.
   WARNING: '%dg_warning',
 } as const;
 

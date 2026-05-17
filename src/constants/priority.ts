@@ -1,17 +1,15 @@
 export const PRIORITY = {
+  NONE: 0,
   LOW: 1,
-  NORMAL: 2,
-  MEDIUM: 3,
-  HIGH: 4,
-  URGENT: 5,
+  MEDIUM: 2,
+  HIGH: 3,
 } as const;
 
 export type PriorityLevel = (typeof PRIORITY)[keyof typeof PRIORITY];
 
 export const PRIORITY_ALIASES: Record<string, PriorityLevel> = {
+  none: PRIORITY.NONE,
   low: PRIORITY.LOW,
-  normal: PRIORITY.NORMAL,
   medium: PRIORITY.MEDIUM,
   high: PRIORITY.HIGH,
-  urgent: PRIORITY.URGENT,
 };
