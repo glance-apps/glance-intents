@@ -16,3 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `normalize/` module: four pure normalizers — `normalizePriority` (int|string → canonical `PriorityLevel`), `normalizeRecurring` (shorthand or RRULE → canonical RRULE), `normalizeTags` (extracts inline `#tags` from title, merges with `tags` field, dedupes, lowercases), `normalizeDue` (date-only/datetime/`today`/`tomorrow` → canonical ISO string with implied `all_day`). `normalizeDue` accepts an injected `now` for deterministic relative-day testing.
 - `idempotency/` module: `eventId(now?)` returns a lexically-sortable `YYYYMMDDTHHMMSSZ-xxxxxx` string for use as the unique identifier on a `notify` event; `createKey(source_app, source_entity_id, due)` returns a `Promise<string>` SHA-256 hex digest used by the `create` handler to recognize that an incoming payload matches an existing task. Web Crypto throughout (Node 20+ and browsers); zero new dependencies.
 - `webdav/` module: `buildEnvelope({ action, payload, emittedBy, emittedAt?, eventId? })` constructs and validates the WebDAV file envelope with type-safe coupling between `action` and `payload` (passing a mismatched pair is a TypeScript error). `parseEnvelope(raw)` validates an unknown input against the v1 envelope schema and returns a typed `Envelope`. `filenameFor(envelope)` returns the `<event_id>.json` filename for storage; `parseFilename(name)` parses that format back into `{ event_id, timestamp }` or returns `null` on mismatch. No HTTP, no I/O, no polling — those stay app-side.
+
+### Changed
+
+- API surface review: every export from the root `@glance-apps/intents` entry is now intentional, documented in the README, and governed by semver. No public-facing breaks; the cleanup is internal-only.
+- README expanded from skeleton: installation, four usage examples (validate inbound, build outbound, normalize input, generate idempotency keys), enumerated public API, versioning policy, consumer notes.
+
+### Removed
+
+- Empty placeholder directories `src/envelope/` and `src/types/` (scaffolded in PR #1, never populated; envelope helpers live in `src/webdav/`, types are re-exported from their owning modules). No public-facing impact.
