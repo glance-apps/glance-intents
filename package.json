@@ -1,6 +1,6 @@
 {
   "name": "@glance-apps/intents",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shared intent protocol for the GLANCE family of apps",
   "license": "MIT",
   "type": "module",
@@ -29,6 +29,7 @@
     "build": "tsup",
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
+    "prepublishOnly": "pnpm build && pnpm test",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
