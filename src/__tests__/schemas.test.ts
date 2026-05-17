@@ -176,12 +176,12 @@ describe('OpenSchema', () => {
     expect(OpenSchema.safeParse({ tab: 'future_tab' }).success).toBe(true);
   });
 
-  it('rejects empty tab', () => {
+  it('rejects empty tab (distinct from omitted)', () => {
     expect(OpenSchema.safeParse({ tab: '' }).success).toBe(false);
   });
 
-  it('rejects missing tab', () => {
-    expect(OpenSchema.safeParse({}).success).toBe(false);
+  it('accepts omitted tab (handler falls back to glance)', () => {
+    expect(OpenSchema.safeParse({}).success).toBe(true);
   });
 
   it('rejects unknown fields (strict)', () => {
