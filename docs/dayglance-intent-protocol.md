@@ -149,7 +149,7 @@ Brings dayGLANCE to the foreground on a specific tab.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `tab` | String | Yes | See tab names below |
+| `tab` | String | No | See tab names below. If omitted or unrecognized, defaults to `glance`. |
 
 **Tab names:**
 
