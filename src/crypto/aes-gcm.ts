@@ -4,7 +4,7 @@ export async function encryptAesGcm(
   plaintext: string,
   key: CryptoKey,
 ): Promise<{ ciphertext: string; iv: string }> {
-  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(new ArrayBuffer(IV_BYTE_LENGTH)));
   const encoded = new TextEncoder().encode(plaintext);
   const encrypted = await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
   return {
@@ -36,11 +36,12 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return globalThis.btoa(binary);
 }
 
-function base64ToUint8Array(b64: string): Uint8Array {
+function base64ToUint8Array(b64: string): Uint8Array<ArrayBuffer> {
   const binary = globalThis.atob(b64);
-  const bytes = new Uint8Array(binary.length);
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
 }
+
