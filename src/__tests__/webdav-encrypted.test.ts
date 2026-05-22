@@ -211,7 +211,7 @@ describe('buildEncryptedEnvelope', () => {
   it('two calls with the same payload produce different ciphertext (random IV)', async () => {
     const key = await generateKey();
     const args = {
-      action: ACTIONS.CREATE as const,
+      action: 'create' as const,
       payload: sampleCreatePayload,
       emittedBy: 'app.lastglance',
       eventId: '20260517T143022Z-aabbcc',
