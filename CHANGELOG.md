@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.1.0] - 2026-05-22
+
+Adds optional AES-GCM envelope encryption for `create` and `notify` actions (Phase 2.5). Non-breaking: plaintext envelopes remain valid and all existing APIs are unchanged.
+
+### Added
+
+- **`crypto/`** — AES-GCM encrypt/decrypt primitives (`encryptAesGcm`, `decryptAesGcm`). Operate on `CryptoKey` objects (Web Crypto API); key derivation is the consumer's responsibility. Four typed error classes exported: `NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`.
+- **`schemas/v1/`** — `EncryptedEnvelopeSchema` and `EncryptedEnvelope` type. The encrypted envelope retains `schema_version`, `event_id`, `emitted_at`, `emitted_by`, `encrypted: true`, `iv` (base64), `payload_ciphertext` (base64), and optionally `source_app`, `source_entity_id`, `due` (hoisted from the payload for filtering and idempotency without bulk decryption). The `action` and full payload live in the ciphertext only.
+- **`webdav/`** — `buildEncryptedEnvelope(args, key)` and `parseEncryptedEnvelope(raw, key)`. Only `create` and `notify` actions are encryptable (`EncryptableAction` type exported). `buildEncryptedEnvelope` encrypts the full `{ action, payload }` and hoists `source_app`, `source_entity_id`, and `due` to the plaintext header. `parseEncryptedEnvelope` decrypts and validates through `EnvelopeSchema`, returning a typed `Envelope` on success; throws typed errors on failure.
+
+### Notes
+
+- Per-event random IV (12 bytes / 96-bit); no IV reuse.
+- Consumers without a key skip encrypted events by catching `WrongKeyError` or checking for `encrypted: true` before calling `parseEncryptedEnvelope`.
+- Plaintext and encrypted envelopes coexist in the same WebDAV directory.
+
 ## [1.0.1] - 2026-05-17
 
 1.0.0 was published with a build pipeline gap — the tarball did not include compiled output. 1.0.1 is the first usable release; its content matches the intended scope of 1.0.0. A `prepublishOnly` script now guards against recurrence.

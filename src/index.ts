@@ -12,6 +12,7 @@
 // protocol bumps to v2.
 
 export * from './constants/index.js';
+export * from './crypto/index.js';
 export * from './idempotency/index.js';
 export * from './normalize/index.js';
 export * from './schemas/v1/index.js';
