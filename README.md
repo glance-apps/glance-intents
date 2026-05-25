@@ -71,13 +71,14 @@ await webdavClient.put(`/GLANCE/events/${filenameFor(envelope)}`, JSON.stringify
 
 ### Encrypt an outbound intent (optional)
 
-When intents encryption is enabled, pass the consumer's derived `CryptoKey` to `buildEncryptedEnvelope`. The action and full payload are encrypted; only the routing and idempotency fields stay in the plaintext header:
+When intents encryption is enabled, pass a `deriveKey` callback to `buildEncryptedEnvelope`. The callback receives a freshly-generated random salt and returns a `CryptoKey`; the package embeds the salt in the envelope so the consumer on the other end can derive the same key. The action and full payload are encrypted; only the routing and idempotency fields stay in the plaintext header:
 
 ```typescript
 import { ACTIONS, EVENTS, buildEncryptedEnvelope, filenameFor } from '@glance-apps/intents';
+import { deriveKeyForSalt } from '@glance-apps/sync';
 
-// key is a CryptoKey derived from the user's sync passphrase —
-// key derivation lives in the consumer's existing sync-encryption code.
+// deriveKeyForSalt is (salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>.
+// It runs PBKDF2 against the cached sync passphrase for the supplied salt.
 const encrypted = await buildEncryptedEnvelope(
   {
     action: ACTIONS.NOTIFY,
@@ -92,7 +93,7 @@ const encrypted = await buildEncryptedEnvelope(
       timestamp: '2026-05-17T14:30:22Z',
     },
   },
-  key,
+  deriveKeyForSalt,
 );
 
 await webdavClient.put(`/GLANCE/events/${filenameFor(encrypted)}`, JSON.stringify(encrypted));
@@ -112,19 +113,20 @@ import {
   parseEnvelope,
   parseEncryptedEnvelope,
 } from '@glance-apps/intents';
+import { hasEncryptionReady, deriveKeyForSalt } from '@glance-apps/sync';
 
 const raw = JSON.parse(await fetchEventFile(filename));
 
 if ((raw as { encrypted?: unknown }).encrypted === true) {
-  if (!key) {
+  if (!hasEncryptionReady()) {
     logWarning(filename, 'skipped: no decryption key configured');
     return;
   }
   try {
-    const envelope = await parseEncryptedEnvelope(raw, key);
+    const envelope = await parseEncryptedEnvelope(raw, deriveKeyForSalt);
     handleEnvelope(envelope);
   } catch (e) {
-    if (e instanceof WrongKeyError) logWarning(filename, 'decryption failed: wrong key');
+    if (e instanceof WrongKeyError) logWarning(filename, 'decryption failed: wrong passphrase — verify same passphrase used in both apps');
     else if (e instanceof MalformedEnvelopeError) logWarning(filename, `malformed: ${e.message}`);
     else throw e;
   }
@@ -205,7 +207,7 @@ Error classes (all extend `Error`): `NoKeyError`, `WrongKeyError`, `NotEncrypted
 
 Plaintext: `buildEnvelope`, `parseEnvelope`, `filenameFor`, `parseFilename`. Types: `ActionPayloadMap`, `BuildEnvelopeArgs`, `ParsedFilename`.
 
-Encrypted: `buildEncryptedEnvelope(args, key)`, `parseEncryptedEnvelope(raw, key)`. Both async. `buildEncryptedEnvelope` is generic over `EncryptableAction` (`'create' | 'notify'`). Types: `EncryptableAction`, `BuildEncryptedEnvelopeArgs`.
+Encrypted: `buildEncryptedEnvelope(args, deriveKey)`, `parseEncryptedEnvelope(raw, deriveKey)`. Both async. `deriveKey` has signature `(salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>`; pass `sync.deriveKeyForSalt` from `@glance-apps/sync@1.1.0+`. A fresh random 16-byte salt is generated per envelope on build and embedded in the envelope header; the consumer extracts the salt and calls `deriveKey` to reconstruct the matching key. `buildEncryptedEnvelope` is generic over `EncryptableAction` (`'create' | 'notify'`). Types: `EncryptableAction`, `BuildEncryptedEnvelopeArgs`.
 
 ## Versioning
 
@@ -225,7 +227,7 @@ Full versioning policy (what counts as breaking, minor, patch) is documented in 
 - **`createKey` assumes normalized inputs.** The handler is expected to call `normalizeDue` before `createKey` so relative inputs like `"today"` and the literal date they resolve to produce the same key.
 - **`schemas.v1.*` is the stable namespace for protocol v1.** Use the namespaced form if you want to be explicit about which version you validate against; use the flat form for convenience.
 - **Encryption is per-app, per-user, opt-in.** Plaintext and encrypted envelopes coexist in the same WebDAV directory. Consumers without a key skip encrypted events; they don't hard-fail.
-- **The package does not derive keys.** `buildEncryptedEnvelope` and `parseEncryptedEnvelope` accept a `CryptoKey` you derive from the user's passphrase using your existing sync-encryption code. Only `create` and `notify` are encryptable; the other three actions always use the plaintext path.
+- **The package does not derive keys.** `buildEncryptedEnvelope` and `parseEncryptedEnvelope` accept a `deriveKey` callback — pass `sync.deriveKeyForSalt` from `@glance-apps/sync`. The package generates a per-envelope salt, calls the callback to obtain a `CryptoKey`, and embeds the salt in the envelope so any app using the same passphrase can re-derive the matching key on decrypt. Only `create` and `notify` are encryptable; the other three actions always use the plaintext path.
 - **Runtime dependency: `zod`.** Kept as a single external import; tsup does not bundle it. Consumers can use their own zod version (any `^4`).
 
 ## License
