@@ -42,12 +42,14 @@ const sampleNotifyPayload: NotifyPayload = {
 };
 
 describe('EncryptedEnvelopeSchema', () => {
+  // salt: base64 of 16 zero bytes (AAAAAAAAAAAAAAAAAAAAAA==)
   const validEncryptedEnvelope = {
     schema_version: 1,
     event_id: '20260517T143022Z-7f3a9c',
     emitted_at: '2026-05-17T14:30:22Z',
     emitted_by: 'app.lastglance',
     encrypted: true,
+    salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
     iv: 'AAAAAAAAAAAAAAAA',
     payload_ciphertext: 'c29tZWNpcGhlcnRleHQ=',
   };
@@ -80,6 +82,35 @@ describe('EncryptedEnvelopeSchema', () => {
   it('rejects missing iv', () => {
     const { iv: _, ...rest } = validEncryptedEnvelope;
     expect(EncryptedEnvelopeSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it('rejects missing salt', () => {
+    const { salt: _, ...rest } = validEncryptedEnvelope;
+    expect(EncryptedEnvelopeSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it('rejects salt that decodes to fewer than 16 bytes', () => {
+    // 'AAAA' base64-decodes to 3 bytes
+    expect(
+      EncryptedEnvelopeSchema.safeParse({ ...validEncryptedEnvelope, salt: 'AAAA' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects salt that decodes to more than 16 bytes', () => {
+    // btoa('\x00'.repeat(17)) = 24-char salt decoding to 17 bytes
+    expect(
+      EncryptedEnvelopeSchema.safeParse({
+        ...validEncryptedEnvelope,
+        salt: 'AAAAAAAAAAAAAAAAAAAAAAAAA=',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects salt that is not valid base64', () => {
+    expect(
+      EncryptedEnvelopeSchema.safeParse({ ...validEncryptedEnvelope, salt: 'not-base64!!!' })
+        .success,
+    ).toBe(false);
   });
 
   it('rejects wrong schema_version', () => {
