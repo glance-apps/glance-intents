@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.3.0] - 2026-05-25
+
+Adds HKDF-per-envelope key derivation helpers (Phase 2.7). Consumers no longer need the cloud sync passphrase in memory at emit/poll time — only the cached intents root key, derived once at setup, is required. The `buildEncryptedEnvelope` / `parseEncryptedEnvelope` API shape is unchanged; what changes is the consumer-side implementation of the `deriveKey` callback.
+
+### Added
+
+- **`crypto/`** — `deriveIntentsRootKey(passphrase, sharedRootSalt)`: derives the intents root key from the cloud sync passphrase and a shared WebDAV-stored salt (PBKDF2-SHA-256, 310,000 iterations, 256-bit output imported as a non-extractable HKDF `CryptoKey` with `usages: ['deriveKey']`). Called once at intents-encryption setup; result is safe to cache in IndexedDB.
+- **`crypto/`** — `deriveEnvelopeKey(rootKey, envelopeSalt)`: derives a per-envelope AES-256-GCM key (HKDF-SHA-256 with fixed info string `"glance-intents-envelope-v1"`) from the cached intents root key and the per-envelope salt. Returns a non-extractable `CryptoKey` with `usages: ['encrypt', 'decrypt']`. Use this inside the `deriveKey` callback passed to `buildEncryptedEnvelope` and `parseEncryptedEnvelope`:
+  ```ts
+  const deriveKey = (salt: Uint8Array) => deriveEnvelopeKey(cachedRootKey, salt);
+  ```
+
+### Notes
+
+- The `buildEncryptedEnvelope` and `parseEncryptedEnvelope` signatures are unchanged. The `deriveKey: (salt: Uint8Array) => Promise<CryptoKey>` callback is the same; only the consumer's implementation changes (HKDF against cached root key instead of PBKDF2 against passphrase).
+- **Phase 2.7 migration:** consumers should replace the Phase 2.6 `sync.deriveKeyForSalt` callback with a closure over the cached intents root key using `deriveEnvelopeKey`. The cloud sync passphrase is only needed at intents-encryption setup to call `deriveIntentsRootKey`; it is not needed at emit or poll time.
+- `@glance-apps/sync`'s `deriveKeyForSalt` export (from `1.1.0`) is no longer used by the intents encrypted path in Phase 2.7, but remains valid for any other consumer.
+- Phase 2.6 encrypted envelopes (derived via `sync.deriveKeyForSalt` / PBKDF2-per-envelope) cannot be decrypted by Phase 2.7 consumers. Wipe the shared WebDAV intents directory before Phase 2.7 testing. No production data is affected — encrypted intents were never successfully shipped end-to-end.
+- HKDF is universally available on all target platforms (Chrome 67+, Safari 11.1+, Firefox 57+, Android WebView, Electron, iOS WKWebView). No polyfill needed.
+- Pre-work Q1 finding: HKDF and AES-GCM are separate Web Crypto algorithm types — a single `CryptoKey` cannot carry both `deriveKey` and `encrypt/decrypt` usages. The intents root key is HKDF-typed (usages: `['deriveKey']`); per-envelope keys are AES-GCM-typed (usages: `['encrypt', 'decrypt']`). A non-extractable HKDF `CryptoKey` is fully usable as IKM in `crypto.subtle.deriveKey()`; `extractable: false` only blocks `exportKey`.
+
 ## [1.2.0] - 2026-05-25
 
 Fixes cross-app encrypted intent delivery (Phase 2.6). Encrypted envelopes now carry a per-envelope random salt, mirroring `@glance-apps/sync`'s per-file salt pattern. Two apps sharing the same passphrase now successfully decrypt each other's events. Requires `@glance-apps/sync@1.1.0` or later on the consumer side.
