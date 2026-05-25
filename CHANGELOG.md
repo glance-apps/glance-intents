@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.2.0] - 2026-05-25
+
+Fixes cross-app encrypted intent delivery (Phase 2.6). Encrypted envelopes now carry a per-envelope random salt, mirroring `@glance-apps/sync`'s per-file salt pattern. Two apps sharing the same passphrase now successfully decrypt each other's events. Requires `@glance-apps/sync@1.1.0` or later on the consumer side.
+
+### Changed
+
+- **`webdav/`** — `buildEncryptedEnvelope` and `parseEncryptedEnvelope` signatures changed from `(…, key: CryptoKey)` to `(…, deriveKey: (salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>)`. The emitter generates a fresh random 16-byte salt per envelope and calls `deriveKey(salt)` to obtain the key; the consumer extracts the salt from the envelope and calls `deriveKey(salt)` to obtain the matching key. Consumers pass `sync.deriveKeyForSalt` as the callback.
+
+### Added
+
+- **`schemas/v1/`** — `EncryptedEnvelopeSchema` now requires a `salt` field (`encrypted: true` envelopes without it, or with a malformed value, fail with `MalformedEnvelopeError`). The `salt` field is base64-encoded and must decode to exactly 16 bytes.
+
+### Notes
+
+- `1.1.0` encrypted envelopes (no `salt` field) fail `MalformedEnvelopeError` under the new schema. No production data is affected — cross-app encrypted envelopes never worked under `1.1.0` and no user had a functioning two-app setup using the encrypted path.
+- Plaintext envelopes, `buildEnvelope`, and `parseEnvelope` are unchanged.
+- `getSessionKey()` in `@glance-apps/sync` is no longer used on the encrypted intents path; `deriveKeyForSalt` (new in `@glance-apps/sync@1.1.0`) replaces it for this use case.
+
 ## [1.1.0] - 2026-05-22
 
 Adds optional AES-GCM envelope encryption for `create` and `notify` actions (Phase 2.5). Non-breaking: plaintext envelopes remain valid and all existing APIs are unchanged.

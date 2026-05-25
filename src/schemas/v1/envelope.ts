@@ -70,6 +70,19 @@ export const EncryptedEnvelopeSchema = z
     emitted_at: z.string().datetime({ offset: true }),
     emitted_by: z.string().min(1),
     encrypted: z.literal(true),
+    salt: z
+      .string()
+      .min(1)
+      .refine(
+        (s) => {
+          try {
+            return globalThis.atob(s).length === 16;
+          } catch {
+            return false;
+          }
+        },
+        { message: 'salt must be base64-encoded and decode to exactly 16 bytes' },
+      ),
     iv: z.string().min(1),
     source_app: z.string().optional(),
     source_entity_id: z.string().optional(),
