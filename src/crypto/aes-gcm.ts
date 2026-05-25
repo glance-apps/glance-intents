@@ -28,7 +28,7 @@ export async function decryptAesGcm(
   return new TextDecoder().decode(decrypted);
 }
 
-function uint8ArrayToBase64(bytes: Uint8Array): string {
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
@@ -36,7 +36,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return globalThis.btoa(binary);
 }
 
-function base64ToUint8Array(b64: string): Uint8Array<ArrayBuffer> {
+export function base64ToUint8Array(b64: string): Uint8Array<ArrayBuffer> {
   const binary = globalThis.atob(b64);
   const bytes = new Uint8Array(new ArrayBuffer(binary.length));
   for (let i = 0; i < binary.length; i++) {
