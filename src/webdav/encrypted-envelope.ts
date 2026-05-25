@@ -1,5 +1,10 @@
 import { SCHEMA_VERSION } from '../constants/index.js';
-import { decryptAesGcm, encryptAesGcm } from '../crypto/aes-gcm.js';
+import {
+  base64ToUint8Array,
+  decryptAesGcm,
+  encryptAesGcm,
+  uint8ArrayToBase64,
+} from '../crypto/aes-gcm.js';
 import { MalformedEnvelopeError, NotEncryptedError, WrongKeyError } from '../crypto/errors.js';
 import { eventId as generateEventId } from '../idempotency/index.js';
 import {
@@ -26,10 +31,13 @@ export interface BuildEncryptedEnvelopeArgs<A extends EncryptableAction> {
 
 export async function buildEncryptedEnvelope<A extends EncryptableAction>(
   args: BuildEncryptedEnvelopeArgs<A>,
-  key: CryptoKey,
+  deriveKey: (salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>,
 ): Promise<EncryptedEnvelope> {
   const emittedAt = args.emittedAt ?? new Date();
   const evtId = args.eventId ?? generateEventId(emittedAt);
+
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(salt);
 
   const { ciphertext, iv } = await encryptAesGcm(
     JSON.stringify({ action: args.action, payload: args.payload }),
@@ -45,6 +53,7 @@ export async function buildEncryptedEnvelope<A extends EncryptableAction>(
     emitted_at: emittedAt.toISOString(),
     emitted_by: args.emittedBy,
     encrypted: true,
+    salt: uint8ArrayToBase64(salt),
     iv,
     payload_ciphertext: ciphertext,
   };
@@ -55,7 +64,10 @@ export async function buildEncryptedEnvelope<A extends EncryptableAction>(
   return EncryptedEnvelopeSchema.parse(rawHeader);
 }
 
-export async function parseEncryptedEnvelope(raw: unknown, key: CryptoKey): Promise<Envelope> {
+export async function parseEncryptedEnvelope(
+  raw: unknown,
+  deriveKey: (salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>,
+): Promise<Envelope> {
   if (typeof raw !== 'object' || raw === null) {
     throw new MalformedEnvelopeError('expected an object');
   }
@@ -68,6 +80,9 @@ export async function parseEncryptedEnvelope(raw: unknown, key: CryptoKey): Prom
     throw new MalformedEnvelopeError(`invalid encrypted envelope: ${headerResult.error.message}`);
   }
   const header = headerResult.data;
+
+  const salt = base64ToUint8Array(header.salt);
+  const key = await deriveKey(salt);
 
   let decrypted: string;
   try {

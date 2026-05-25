@@ -16,11 +16,38 @@ import {
 } from '../schemas/v1/index.js';
 import { buildEnvelope, buildEncryptedEnvelope, parseEncryptedEnvelope } from '../webdav/index.js';
 
-async function generateKey(): Promise<CryptoKey> {
-  return globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+// Returns a deriveKey function that always returns the same pre-generated key,
+// ignoring the salt. Fast for tests that verify API plumbing rather than
+// cross-passphrase derivation correctness.
+async function generateDeriveKey(): Promise<(salt: Uint8Array) => Promise<CryptoKey>> {
+  const key = await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
     'encrypt',
     'decrypt',
   ]);
+  return (_salt: Uint8Array) => Promise.resolve(key);
+}
+
+// Returns a proper PBKDF2-based deriveKey function for a given passphrase.
+// Two calls with the same passphrase produce independent deriveKey functions
+// that derive the same key for the same salt — mirroring the cross-app scenario.
+async function makePbkdf2DeriveKey(
+  passphrase: string,
+): Promise<(salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>> {
+  const baseKey = await globalThis.crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  );
+  return (salt: Uint8Array<ArrayBuffer>) =>
+    globalThis.crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 1, hash: 'SHA-256' },
+      baseKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
+    );
 }
 
 const sampleCreatePayload: CreatePayload = {
@@ -97,7 +124,7 @@ describe('EncryptedEnvelopeSchema', () => {
   });
 
   it('rejects salt that decodes to more than 16 bytes', () => {
-    // btoa('\x00'.repeat(17)) = 24-char salt decoding to 17 bytes
+    // btoa('\x00'.repeat(17)) decodes to 17 bytes
     expect(
       EncryptedEnvelopeSchema.safeParse({
         ...validEncryptedEnvelope,
@@ -135,17 +162,17 @@ describe('EncryptedEnvelopeSchema', () => {
 
 describe('buildEncryptedEnvelope', () => {
   it('returns an EncryptedEnvelope with encrypted: true', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key,
+      deriveKey,
     );
     expect(result.encrypted).toBe(true);
     expectTypeOf(result).toEqualTypeOf<EncryptedEnvelope>();
   });
 
   it('envelope header fields are populated correctly', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const emittedAt = new Date('2026-05-17T14:30:22.000Z');
     const result = await buildEncryptedEnvelope(
       {
@@ -155,7 +182,7 @@ describe('buildEncryptedEnvelope', () => {
         emittedAt,
         eventId: '20260517T143022Z-7f3a9c',
       },
-      key,
+      deriveKey,
     );
     expect(result.schema_version).toBe(SCHEMA_VERSION);
     expect(result.event_id).toBe('20260517T143022Z-7f3a9c');
@@ -163,11 +190,34 @@ describe('buildEncryptedEnvelope', () => {
     expect(result.emitted_by).toBe('app.lastglance');
   });
 
-  it('hoists source_app, source_entity_id, and due from a create payload', async () => {
-    const key = await generateKey();
+  it('envelope includes a base64-encoded 16-byte salt', async () => {
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key,
+      deriveKey,
+    );
+    expect(() => globalThis.atob(result.salt)).not.toThrow();
+    expect(globalThis.atob(result.salt).length).toBe(16);
+  });
+
+  it('two calls produce different salts', async () => {
+    const deriveKey = await generateDeriveKey();
+    const args = {
+      action: 'create' as const,
+      payload: sampleCreatePayload,
+      emittedBy: 'app.lastglance',
+      eventId: '20260517T143022Z-aabbcc',
+    };
+    const r1 = await buildEncryptedEnvelope(args, deriveKey);
+    const r2 = await buildEncryptedEnvelope(args, deriveKey);
+    expect(r1.salt).not.toBe(r2.salt);
+  });
+
+  it('hoists source_app, source_entity_id, and due from a create payload', async () => {
+    const deriveKey = await generateDeriveKey();
+    const result = await buildEncryptedEnvelope(
+      { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
+      deriveKey,
     );
     expect(result.source_app).toBe('app.lastglance');
     expect(result.source_entity_id).toBe('chore_42');
@@ -175,10 +225,10 @@ describe('buildEncryptedEnvelope', () => {
   });
 
   it('hoists source_app, source_entity_id, and due from a notify payload', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.NOTIFY, payload: sampleNotifyPayload, emittedBy: 'app.dayglance' },
-      key,
+      deriveKey,
     );
     expect(result.source_app).toBe('app.lastglance');
     expect(result.source_entity_id).toBe('chore_42');
@@ -186,10 +236,10 @@ describe('buildEncryptedEnvelope', () => {
   });
 
   it('does not hoist source_app or source_entity_id when absent from create payload', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: { title: 'Buy milk' }, emittedBy: 'app.dayglance' },
-      key,
+      deriveKey,
     );
     expect(result.source_app).toBeUndefined();
     expect(result.source_entity_id).toBeUndefined();
@@ -197,36 +247,36 @@ describe('buildEncryptedEnvelope', () => {
   });
 
   it('does not include action or payload in the plaintext header', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key,
+      deriveKey,
     );
     expect(result).not.toHaveProperty('action');
     expect(result).not.toHaveProperty('payload');
   });
 
   it('produces base64-encoded iv and payload_ciphertext', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key,
+      deriveKey,
     );
     expect(() => globalThis.atob(result.iv)).not.toThrow();
     expect(() => globalThis.atob(result.payload_ciphertext)).not.toThrow();
   });
 
   it('generates a unique event_id when not provided', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: { title: 'x' }, emittedBy: 'app.dayglance' },
-      key,
+      deriveKey,
     );
     expect(result.event_id).toMatch(/^\d{8}T\d{6}Z-[a-f0-9]{6}$/);
   });
 
   it('uses the provided eventId', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const result = await buildEncryptedEnvelope(
       {
         action: ACTIONS.CREATE,
@@ -234,52 +284,53 @@ describe('buildEncryptedEnvelope', () => {
         emittedBy: 'app.dayglance',
         eventId: '20260601T120000Z-deadbe',
       },
-      key,
+      deriveKey,
     );
     expect(result.event_id).toBe('20260601T120000Z-deadbe');
   });
 
-  it('two calls with the same payload produce different ciphertext (random IV)', async () => {
-    const key = await generateKey();
+  it('two calls with the same payload produce different ciphertext (random IV and salt)', async () => {
+    const deriveKey = await generateDeriveKey();
     const args = {
       action: 'create' as const,
       payload: sampleCreatePayload,
       emittedBy: 'app.lastglance',
       eventId: '20260517T143022Z-aabbcc',
     };
-    const r1 = await buildEncryptedEnvelope(args, key);
-    const r2 = await buildEncryptedEnvelope(args, key);
+    const r1 = await buildEncryptedEnvelope(args, deriveKey);
+    const r2 = await buildEncryptedEnvelope(args, deriveKey);
     expect(r1.iv).not.toBe(r2.iv);
+    expect(r1.salt).not.toBe(r2.salt);
     expect(r1.payload_ciphertext).not.toBe(r2.payload_ciphertext);
   });
 });
 
 describe('parseEncryptedEnvelope', () => {
   it('round-trips a create envelope through build → parse', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const encrypted = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key,
+      deriveKey,
     );
-    const envelope = await parseEncryptedEnvelope(JSON.parse(JSON.stringify(encrypted)), key);
+    const envelope = await parseEncryptedEnvelope(JSON.parse(JSON.stringify(encrypted)), deriveKey);
     expect(envelope.action).toBe('create');
     expect(envelope.payload).toEqual(sampleCreatePayload);
     expectTypeOf(envelope).toEqualTypeOf<Envelope>();
   });
 
   it('round-trips a notify envelope through build → parse', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const encrypted = await buildEncryptedEnvelope(
       { action: ACTIONS.NOTIFY, payload: sampleNotifyPayload, emittedBy: 'app.dayglance' },
-      key,
+      deriveKey,
     );
-    const envelope = await parseEncryptedEnvelope(JSON.parse(JSON.stringify(encrypted)), key);
+    const envelope = await parseEncryptedEnvelope(JSON.parse(JSON.stringify(encrypted)), deriveKey);
     expect(envelope.action).toBe('notify');
     expect(envelope.payload).toEqual(sampleNotifyPayload);
   });
 
   it('decrypted envelope has the original envelope header fields', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const emittedAt = new Date('2026-05-17T14:30:22.000Z');
     const encrypted = await buildEncryptedEnvelope(
       {
@@ -289,9 +340,9 @@ describe('parseEncryptedEnvelope', () => {
         emittedAt,
         eventId: '20260517T143022Z-7f3a9c',
       },
-      key,
+      deriveKey,
     );
-    const envelope = await parseEncryptedEnvelope(encrypted, key);
+    const envelope = await parseEncryptedEnvelope(encrypted, deriveKey);
     expect(envelope.schema_version).toBe(SCHEMA_VERSION);
     expect(envelope.event_id).toBe('20260517T143022Z-7f3a9c');
     expect(envelope.emitted_at).toBe('2026-05-17T14:30:22.000Z');
@@ -299,7 +350,7 @@ describe('parseEncryptedEnvelope', () => {
   });
 
   it('decrypted result equals what buildEnvelope would have produced', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const emittedAt = new Date('2026-05-20T10:00:00.000Z');
     const eventIdStr = '20260520T100000Z-abc123';
 
@@ -319,97 +370,144 @@ describe('parseEncryptedEnvelope', () => {
         emittedAt,
         eventId: eventIdStr,
       },
-      key,
+      deriveKey,
     );
 
-    const decrypted = await parseEncryptedEnvelope(encrypted, key);
+    const decrypted = await parseEncryptedEnvelope(encrypted, deriveKey);
     expect(decrypted).toEqual(plainEnvelope);
   });
 
-  it('throws WrongKeyError when decrypting with the wrong key', async () => {
-    const key1 = await generateKey();
-    const key2 = await generateKey();
+  // Phase 2.6 core scenario: two independent deriveKey closures for the same
+  // passphrase must agree because the salt is embedded in the envelope.
+  it('cross-app round-trip: same passphrase, independent deriveKey closures', async () => {
+    const passphrase = 'correct horse battery staple';
+    const deriveKeyApp1 = await makePbkdf2DeriveKey(passphrase);
+    const deriveKeyApp2 = await makePbkdf2DeriveKey(passphrase);
+
     const encrypted = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
-      key1,
+      deriveKeyApp1,
     );
-    await expect(parseEncryptedEnvelope(encrypted, key2)).rejects.toBeInstanceOf(WrongKeyError);
+    const envelope = await parseEncryptedEnvelope(encrypted, deriveKeyApp2);
+    expect(envelope.action).toBe('create');
+    expect(envelope.payload).toEqual(sampleCreatePayload);
+  });
+
+  it('throws WrongKeyError when passphrases differ (cross-app mismatch)', async () => {
+    const deriveKeyApp1 = await makePbkdf2DeriveKey('correct-passphrase');
+    const deriveKeyApp2 = await makePbkdf2DeriveKey('wrong-passphrase');
+
+    const encrypted = await buildEncryptedEnvelope(
+      { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
+      deriveKeyApp1,
+    );
+    await expect(parseEncryptedEnvelope(encrypted, deriveKeyApp2)).rejects.toBeInstanceOf(
+      WrongKeyError,
+    );
   });
 
   it('throws NotEncryptedError for a plaintext envelope', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const plaintext = buildEnvelope({
       action: ACTIONS.CREATE,
       payload: sampleCreatePayload,
       emittedBy: 'app.lastglance',
     });
-    await expect(parseEncryptedEnvelope(plaintext, key)).rejects.toBeInstanceOf(NotEncryptedError);
+    await expect(parseEncryptedEnvelope(plaintext, deriveKey)).rejects.toBeInstanceOf(
+      NotEncryptedError,
+    );
   });
 
   it('throws NotEncryptedError for a non-envelope object without encrypted field', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     await expect(
-      parseEncryptedEnvelope({ some: 'random object' }, key),
+      parseEncryptedEnvelope({ some: 'random object' }, deriveKey),
     ).rejects.toBeInstanceOf(NotEncryptedError);
   });
 
   it('throws MalformedEnvelopeError for a non-object input', async () => {
-    const key = await generateKey();
-    await expect(parseEncryptedEnvelope('string input', key)).rejects.toBeInstanceOf(
+    const deriveKey = await generateDeriveKey();
+    await expect(parseEncryptedEnvelope('string input', deriveKey)).rejects.toBeInstanceOf(
       MalformedEnvelopeError,
     );
-    await expect(parseEncryptedEnvelope(null, key)).rejects.toBeInstanceOf(MalformedEnvelopeError);
-    await expect(parseEncryptedEnvelope(42, key)).rejects.toBeInstanceOf(MalformedEnvelopeError);
+    await expect(parseEncryptedEnvelope(null, deriveKey)).rejects.toBeInstanceOf(
+      MalformedEnvelopeError,
+    );
+    await expect(parseEncryptedEnvelope(42, deriveKey)).rejects.toBeInstanceOf(
+      MalformedEnvelopeError,
+    );
   });
 
   it('throws MalformedEnvelopeError for an object with encrypted: true but missing required fields', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     await expect(
-      parseEncryptedEnvelope({ encrypted: true, iv: 'AAAA', payload_ciphertext: 'BBBB' }, key),
+      parseEncryptedEnvelope({ encrypted: true, iv: 'AAAA', payload_ciphertext: 'BBBB' }, deriveKey),
     ).rejects.toBeInstanceOf(MalformedEnvelopeError);
   });
 
+  it('throws MalformedEnvelopeError when salt field is missing from an otherwise valid encrypted envelope', async () => {
+    const deriveKey = await generateDeriveKey();
+    const encrypted = await buildEncryptedEnvelope(
+      { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
+      deriveKey,
+    );
+    const { salt: _, ...withoutSalt } = encrypted;
+    await expect(parseEncryptedEnvelope(withoutSalt, deriveKey)).rejects.toBeInstanceOf(
+      MalformedEnvelopeError,
+    );
+  });
+
   it('throws WrongKeyError (GCM auth tag) when ciphertext is replaced with garbage base64', async () => {
-    const key = await generateKey();
+    const deriveKey = await generateDeriveKey();
     const encrypted = await buildEncryptedEnvelope(
       { action: ACTIONS.CREATE, payload: { title: 'x' }, emittedBy: 'app.dayglance' },
-      key,
+      deriveKey,
     );
     const tampered = { ...encrypted, payload_ciphertext: globalThis.btoa('not ciphertext!!!') };
-    await expect(parseEncryptedEnvelope(tampered, key)).rejects.toBeInstanceOf(WrongKeyError);
+    await expect(parseEncryptedEnvelope(tampered, deriveKey)).rejects.toBeInstanceOf(WrongKeyError);
   });
 
   it('throws MalformedEnvelopeError when decrypted content is not valid JSON', async () => {
-    const key = await generateKey();
-    // Craft an envelope whose ciphertext decrypts to a non-JSON string
-    const { ciphertext, iv } = await encryptAesGcm('not json at all }{', key);
+    const deriveKey = await generateDeriveKey();
+    // Craft an envelope whose ciphertext decrypts to a non-JSON string using
+    // the same key that deriveKey returns (salt ignored by generateDeriveKey).
+    const fakeKey = await deriveKey(new Uint8Array(16));
+    const fakeSalt = globalThis.btoa('a'.repeat(16)); // 16 ASCII bytes
+    const { ciphertext, iv } = await encryptAesGcm('not json at all }{', fakeKey);
     const base = {
       schema_version: SCHEMA_VERSION,
       event_id: '20260517T143022Z-7f3a9c',
       emitted_at: '2026-05-17T14:30:22Z',
       emitted_by: 'app.lastglance',
       encrypted: true,
+      salt: fakeSalt,
       iv,
       payload_ciphertext: ciphertext,
     };
-    await expect(parseEncryptedEnvelope(base, key)).rejects.toBeInstanceOf(MalformedEnvelopeError);
-    await expect(parseEncryptedEnvelope(base, key)).rejects.toThrow('not valid JSON');
+    await expect(parseEncryptedEnvelope(base, deriveKey)).rejects.toBeInstanceOf(
+      MalformedEnvelopeError,
+    );
+    await expect(parseEncryptedEnvelope(base, deriveKey)).rejects.toThrow('not valid JSON');
   });
 
   it('throws MalformedEnvelopeError when decrypted JSON does not match the envelope schema', async () => {
-    const key = await generateKey();
-    // Craft an envelope whose ciphertext decrypts to valid JSON but not a valid envelope
-    const { ciphertext, iv } = await encryptAesGcm(JSON.stringify({ foo: 'bar' }), key);
+    const deriveKey = await generateDeriveKey();
+    const fakeKey = await deriveKey(new Uint8Array(16));
+    const fakeSalt = globalThis.btoa('b'.repeat(16));
+    const { ciphertext, iv } = await encryptAesGcm(JSON.stringify({ foo: 'bar' }), fakeKey);
     const base = {
       schema_version: SCHEMA_VERSION,
       event_id: '20260517T143022Z-7f3a9c',
       emitted_at: '2026-05-17T14:30:22Z',
       emitted_by: 'app.lastglance',
       encrypted: true,
+      salt: fakeSalt,
       iv,
       payload_ciphertext: ciphertext,
     };
-    await expect(parseEncryptedEnvelope(base, key)).rejects.toBeInstanceOf(MalformedEnvelopeError);
-    await expect(parseEncryptedEnvelope(base, key)).rejects.toThrow('invalid decrypted envelope');
+    await expect(parseEncryptedEnvelope(base, deriveKey)).rejects.toBeInstanceOf(
+      MalformedEnvelopeError,
+    );
+    await expect(parseEncryptedEnvelope(base, deriveKey)).rejects.toThrow('invalid decrypted envelope');
   });
 });
