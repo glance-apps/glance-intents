@@ -7,6 +7,7 @@ import {
   NotEncryptedError,
   WrongKeyError,
 } from '../crypto/errors.js';
+import { deriveEnvelopeKey, deriveIntentsRootKey } from '../crypto/hkdf.js';
 import {
   type CreatePayload,
   type EncryptedEnvelope,
@@ -391,6 +392,42 @@ describe('parseEncryptedEnvelope', () => {
     const envelope = await parseEncryptedEnvelope(encrypted, deriveKeyApp2);
     expect(envelope.action).toBe('create');
     expect(envelope.payload).toEqual(sampleCreatePayload);
+  });
+
+  // Phase 2.7 core scenario: two apps derive independent root keys from the
+  // same passphrase + shared WebDAV root salt, then use HKDF per envelope.
+  // No passphrase access needed after setup — only the cached root keys.
+  it('cross-app round-trip: HKDF-based deriveKey from shared root key (Phase 2.7)', async () => {
+    const passphrase = 'correct horse battery staple';
+    const sharedRootSalt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    const rootKey1 = await deriveIntentsRootKey(passphrase, sharedRootSalt);
+    const rootKey2 = await deriveIntentsRootKey(passphrase, sharedRootSalt);
+    const deriveKeyApp1 = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(rootKey1, salt);
+    const deriveKeyApp2 = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(rootKey2, salt);
+
+    const encrypted = await buildEncryptedEnvelope(
+      { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
+      deriveKeyApp1,
+    );
+    const envelope = await parseEncryptedEnvelope(encrypted, deriveKeyApp2);
+    expect(envelope.action).toBe('create');
+    expect(envelope.payload).toEqual(sampleCreatePayload);
+  });
+
+  it('HKDF cross-app: mismatched passphrase produces WrongKeyError', async () => {
+    const sharedRootSalt = new Uint8Array(16);
+    const rootKey1 = await deriveIntentsRootKey('correct-passphrase', sharedRootSalt);
+    const rootKey2 = await deriveIntentsRootKey('wrong-passphrase', sharedRootSalt);
+    const deriveKeyApp1 = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(rootKey1, salt);
+    const deriveKeyApp2 = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(rootKey2, salt);
+
+    const encrypted = await buildEncryptedEnvelope(
+      { action: ACTIONS.CREATE, payload: sampleCreatePayload, emittedBy: 'app.lastglance' },
+      deriveKeyApp1,
+    );
+    await expect(parseEncryptedEnvelope(encrypted, deriveKeyApp2)).rejects.toBeInstanceOf(
+      WrongKeyError,
+    );
   });
 
   it('throws WrongKeyError when passphrases differ (cross-app mismatch)', async () => {

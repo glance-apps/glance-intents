@@ -71,14 +71,29 @@ await webdavClient.put(`/GLANCE/events/${filenameFor(envelope)}`, JSON.stringify
 
 ### Encrypt an outbound intent (optional)
 
-When intents encryption is enabled, pass a `deriveKey` callback to `buildEncryptedEnvelope`. The callback receives a freshly-generated random salt and returns a `CryptoKey`; the package embeds the salt in the envelope so the consumer on the other end can derive the same key. The action and full payload are encrypted; only the routing and idempotency fields stay in the plaintext header:
+Intents encryption uses a two-step key model. At setup time (once per app, when the user enables the intents encryption toggle), derive and cache an intents root key. At emit time, pass a `deriveKey` callback that runs HKDF from the cached root key — no passphrase needed after setup.
+
+**Setup (once per app):**
 
 ```typescript
-import { ACTIONS, EVENTS, buildEncryptedEnvelope, filenameFor } from '@glance-apps/intents';
-import { deriveKeyForSalt } from '@glance-apps/sync';
+import { deriveIntentsRootKey } from '@glance-apps/intents';
 
-// deriveKeyForSalt is (salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>.
-// It runs PBKDF2 against the cached sync passphrase for the supplied salt.
+// sharedRootSalt is a 16-byte Uint8Array read from (or written to) a fixed
+// file on the shared WebDAV endpoint — app-owned logic, not in the package.
+const sharedRootSalt = await fetchOrWriteSharedSalt(webdavClient);
+const rootKey = await deriveIntentsRootKey(passphrase, sharedRootSalt);
+// Cache rootKey non-extractably in IndexedDB (app-owned); discard passphrase.
+// After this point the passphrase is never needed by intents again.
+```
+
+**Emit:**
+
+```typescript
+import { ACTIONS, EVENTS, buildEncryptedEnvelope, deriveEnvelopeKey, filenameFor } from '@glance-apps/intents';
+
+// cachedRootKey comes from IndexedDB — no passphrase needed.
+const deriveKey = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(cachedRootKey, salt);
+
 const encrypted = await buildEncryptedEnvelope(
   {
     action: ACTIONS.NOTIFY,
@@ -93,13 +108,13 @@ const encrypted = await buildEncryptedEnvelope(
       timestamp: '2026-05-17T14:30:22Z',
     },
   },
-  deriveKeyForSalt,
+  deriveKey,
 );
 
 await webdavClient.put(`/GLANCE/events/${filenameFor(encrypted)}`, JSON.stringify(encrypted));
 ```
 
-Only `create` and `notify` actions are encryptable. `query`, `open`, and `complete` carry no user-readable payload and always use the plaintext path.
+The package generates a fresh random 16-byte salt per envelope, calls `deriveKey(salt)` to obtain an AES-256-GCM key, and embeds the salt in the envelope header. Any app that derived the same root key can reconstruct the matching per-envelope key on decrypt. Only `create` and `notify` actions are encryptable; `query`, `open`, and `complete` always use the plaintext path.
 
 ### Read an event file that may be encrypted
 
@@ -107,26 +122,27 @@ When polling WebDAV, check whether each file is encrypted before deciding which 
 
 ```typescript
 import {
-  NotEncryptedError,
   WrongKeyError,
   MalformedEnvelopeError,
   parseEnvelope,
   parseEncryptedEnvelope,
+  deriveEnvelopeKey,
 } from '@glance-apps/intents';
-import { hasEncryptionReady, deriveKeyForSalt } from '@glance-apps/sync';
 
 const raw = JSON.parse(await fetchEventFile(filename));
 
 if ((raw as { encrypted?: unknown }).encrypted === true) {
-  if (!hasEncryptionReady()) {
-    logWarning(filename, 'skipped: no decryption key configured');
+  // cachedRootKey comes from IndexedDB — null if intents encryption was never set up.
+  if (!cachedRootKey) {
+    logWarning(filename, 'skipped: intents encryption not set up in this app');
     return;
   }
   try {
-    const envelope = await parseEncryptedEnvelope(raw, deriveKeyForSalt);
+    const deriveKey = (salt: Uint8Array<ArrayBuffer>) => deriveEnvelopeKey(cachedRootKey, salt);
+    const envelope = await parseEncryptedEnvelope(raw, deriveKey);
     handleEnvelope(envelope);
   } catch (e) {
-    if (e instanceof WrongKeyError) logWarning(filename, 'decryption failed: wrong passphrase — verify same passphrase used in both apps');
+    if (e instanceof WrongKeyError) logWarning(filename, 'decryption failed: wrong key — verify same passphrase used in both apps at setup');
     else if (e instanceof MalformedEnvelopeError) logWarning(filename, `malformed: ${e.message}`);
     else throw e;
   }
@@ -201,13 +217,17 @@ Versioned: `schemas.v1.*` for the same surface, so consumers that explicitly pin
 
 `encryptAesGcm(plaintext, key)`, `decryptAesGcm(ciphertext, iv, key)`. Both async, operating on `CryptoKey` (Web Crypto API). Per-call random 12-byte IV; no IV reuse.
 
+`deriveIntentsRootKey(passphrase, sharedRootSalt)`: derives the intents root key from the cloud sync passphrase and a shared 16-byte salt stored on the WebDAV endpoint. Uses PBKDF2-SHA-256 at 310,000 iterations. Returns a non-extractable HKDF `CryptoKey` with `usages: ['deriveKey']` — safe to cache in IndexedDB. Called once at intents-encryption setup.
+
+`deriveEnvelopeKey(rootKey, envelopeSalt)`: derives a non-extractable AES-256-GCM `CryptoKey` (usages: `['encrypt', 'decrypt']`) from the cached intents root key and the per-envelope salt via HKDF-SHA-256. Use inside the `deriveKey` callback passed to `buildEncryptedEnvelope` / `parseEncryptedEnvelope`.
+
 Error classes (all extend `Error`): `NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`.
 
 ### WebDAV envelope helpers
 
 Plaintext: `buildEnvelope`, `parseEnvelope`, `filenameFor`, `parseFilename`. Types: `ActionPayloadMap`, `BuildEnvelopeArgs`, `ParsedFilename`.
 
-Encrypted: `buildEncryptedEnvelope(args, deriveKey)`, `parseEncryptedEnvelope(raw, deriveKey)`. Both async. `deriveKey` has signature `(salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>`; pass `sync.deriveKeyForSalt` from `@glance-apps/sync@1.1.0+`. A fresh random 16-byte salt is generated per envelope on build and embedded in the envelope header; the consumer extracts the salt and calls `deriveKey` to reconstruct the matching key. `buildEncryptedEnvelope` is generic over `EncryptableAction` (`'create' | 'notify'`). Types: `EncryptableAction`, `BuildEncryptedEnvelopeArgs`.
+Encrypted: `buildEncryptedEnvelope(args, deriveKey)`, `parseEncryptedEnvelope(raw, deriveKey)`. Both async. `deriveKey` has signature `(salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>`; pass `(salt) => deriveEnvelopeKey(cachedRootKey, salt)` where `cachedRootKey` is the non-extractable HKDF key from `deriveIntentsRootKey`. A fresh random 16-byte salt is generated per envelope on build and embedded in the envelope header; the consumer extracts the salt and calls `deriveKey` to reconstruct the matching key. `buildEncryptedEnvelope` is generic over `EncryptableAction` (`'create' | 'notify'`). Types: `EncryptableAction`, `BuildEncryptedEnvelopeArgs`.
 
 ## Versioning
 
@@ -227,7 +247,7 @@ Full versioning policy (what counts as breaking, minor, patch) is documented in 
 - **`createKey` assumes normalized inputs.** The handler is expected to call `normalizeDue` before `createKey` so relative inputs like `"today"` and the literal date they resolve to produce the same key.
 - **`schemas.v1.*` is the stable namespace for protocol v1.** Use the namespaced form if you want to be explicit about which version you validate against; use the flat form for convenience.
 - **Encryption is per-app, per-user, opt-in.** Plaintext and encrypted envelopes coexist in the same WebDAV directory. Consumers without a key skip encrypted events; they don't hard-fail.
-- **The package does not derive keys.** `buildEncryptedEnvelope` and `parseEncryptedEnvelope` accept a `deriveKey` callback — pass `sync.deriveKeyForSalt` from `@glance-apps/sync`. The package generates a per-envelope salt, calls the callback to obtain a `CryptoKey`, and embeds the salt in the envelope so any app using the same passphrase can re-derive the matching key on decrypt. Only `create` and `notify` are encryptable; the other three actions always use the plaintext path.
+- **Two-step key model.** At intents-encryption setup, call `deriveIntentsRootKey(passphrase, sharedRootSalt)` once and cache the result in IndexedDB. At emit/poll time, pass `(salt) => deriveEnvelopeKey(cachedRootKey, salt)` as the `deriveKey` callback to `buildEncryptedEnvelope` / `parseEncryptedEnvelope` — no passphrase needed after setup. The `sharedRootSalt` lives on the shared WebDAV endpoint (app-owned I/O); both apps reading it from the same file derive the same root key and can decrypt each other's envelopes. Only `create` and `notify` are encryptable; the other three actions always use the plaintext path.
 - **Runtime dependency: `zod`.** Kept as a single external import; tsup does not bundle it. Consumers can use their own zod version (any `^4`).
 
 ## License
