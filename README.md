@@ -203,6 +203,8 @@ Organized by module. Every named export is intentional and governed by semver.
 
 Flat: `CreateSchema`, `CompleteSchema`, `OpenSchema`, `QuerySchema`, `NotifySchema`, `EnvelopeSchema`, `EncryptedEnvelopeSchema`, plus inferred types `CreatePayload`, `CompletePayload`, `OpenPayload`, `QueryPayload`, `NotifyPayload`, `Envelope`, `EncryptedEnvelope`.
 
+`CreateSchema` optional fields: `title` (required), `due`, `duration`, `all_day`, `deadline`, `tags`, `priority`, `notes`, `project`, `recurring`, `source_app`, `source_entity_id`, `assigned_user_ids` (`string[]` — list of user IDs the task is assigned to, for cross-app multi-user filtering).
+
 Versioned: `schemas.v1.*` for the same surface, so consumers that explicitly pin a protocol version can do so without breaking when v2 lands alongside.
 
 ### Normalizers

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.3.1] - 2026-06-03
+
+### Added
+
+- **`schemas/v1/`** — `CreateSchema` now accepts an optional `assigned_user_ids` field (`string[]`). Carries the list of user IDs a chore/task is assigned to, enabling cross-app multi-user filtering. Passes strict validation unchanged.
+
 ## [1.3.0] - 2026-05-25
 
 Adds HKDF-per-envelope key derivation helpers (Phase 2.7). Consumers no longer need the cloud sync passphrase in memory at emit/poll time — only the cached intents root key, derived once at setup, is required. The `buildEncryptedEnvelope` / `parseEncryptedEnvelope` API shape is unchanged; what changes is the consumer-side implementation of the `deriveKey` callback.
