@@ -40,6 +40,7 @@ export const CreateSchema = z
     recurring: z.string().min(1).optional(),
     source_app: z.string().regex(sourceAppPattern).optional(),
     source_entity_id: z.string().min(1).optional(),
+    assigned_user_ids: z.array(z.string()).optional(),
   })
   .strict()
   .refine((data) => data.duration === undefined || (!!data.due && hasTimeComponent(data.due)), {
