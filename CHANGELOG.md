@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.3.2] - 2026-06-03
+
+### Added
+
+- **`schemas/v1/`** — `NotifySchema` now accepts an optional `completed_by_user_id` field (`string`). Carries the sync ID of the user who completed the task, enabling receiving apps to attribute the completion. Defined alongside `completed_at`.
+
 ## [1.3.1] - 2026-06-03
 
 ### Added

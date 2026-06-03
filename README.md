@@ -205,6 +205,8 @@ Flat: `CreateSchema`, `CompleteSchema`, `OpenSchema`, `QuerySchema`, `NotifySche
 
 `CreateSchema` optional fields: `title` (required), `due`, `duration`, `all_day`, `deadline`, `tags`, `priority`, `notes`, `project`, `recurring`, `source_app`, `source_entity_id`, `assigned_user_ids` (`string[]` — list of user IDs the task is assigned to, for cross-app multi-user filtering).
 
+`NotifySchema` optional fields include `completed_at` and `completed_by_user_id` (`string` — sync ID of the user who completed the task, for cross-app completion attribution).
+
 Versioned: `schemas.v1.*` for the same surface, so consumers that explicitly pin a protocol version can do so without breaking when v2 lands alongside.
 
 ### Normalizers

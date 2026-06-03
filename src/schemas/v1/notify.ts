@@ -35,6 +35,7 @@ export const NotifySchema = z
     due: isoDateOrDateTime.optional(),
     previous_due: isoDateOrDateTime.optional(),
     completed_at: z.string().datetime({ offset: true }).optional(),
+    completed_by_user_id: z.string().optional(),
   })
   .strict();
 
