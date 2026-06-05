@@ -149,7 +149,7 @@ Brings dayGLANCE to the foreground on a specific tab.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `tab` | String | No | See tab names below. If omitted or unrecognized, defaults to `glance`. |
+| `tab` | String | Yes | See tab names below |
 
 **Tab names:**
 
@@ -202,7 +202,7 @@ dayGLANCE emits `notify` when a task with `source_app` set changes state. Consum
 
 | Field | Type | Always present | Notes |
 |---|---|---|---|
-| `event_id` | String | Yes | Unique id for this event; consumers use this to dedupe at-least-once delivery |
+| `event_id` | String | Yes | Stable id for this logical state change; consumers use this to dedupe at-least-once delivery |
 | `source_app` | String | Yes | Filter: only the matching app should react |
 | `source_entity_id` | String | Yes | Opaque id the source app uses to identify the origin record |
 | `event` | String | Yes | One of `completed`, `uncompleted`, `deleted`, `rescheduled`, `updated` |
@@ -227,6 +227,8 @@ dayGLANCE emits `notify` when a task with `source_app` set changes state. Consum
 Consumers are expected to handle unknown events defensively; new event types may be added in future protocol versions.
 
 **Multi-field changes:** when multiple fields change in a single save (e.g., user edits a task and changes title + priority + notes), this is one `updated` event, not one per field. The event represents the state transition; the payload carries the new state; consumers diff against their own last-known state if they care which fields moved.
+
+**Deletion and cross-device dedup:** the `event_id` on a `notify` event is stable across devices for state changes that modify a surviving task record (`completed`, `uncompleted`, `rescheduled`, `updated`). Both devices emit the same `event_id` for one logical change, so a consumer's `event_id` dedup collapses the duplicate. This guarantee does not extend to `deleted`. A deleted task no longer exists to carry a stable id across the sync boundary, so two devices may emit the same logical deletion with different `event_id`s, and `event_id`-based dedup will not catch the duplicate. Consumers that act on `deleted` and need cross-device idempotency must dedup on a tombstone id (the deleted record's own stable id, preserved in the sync layer's tombstone) rather than on the `notify` `event_id`. No current consumer acts on `deleted`; resolve this when the first one does.
 
 **Behavior:**
 
@@ -522,8 +524,6 @@ lastGLANCE must run usefully without dayGLANCE installed *and* without WebDAV co
 
 lifeGLANCE adopts the protocol for bidirectional Goal↔Milestone linking with dayGLANCE. Either app can originate the linked record: a user can create a milestone in lifeGLANCE and check "track as dayGLANCE Goal," or create a Goal in dayGLANCE and check "track in lifeGLANCE." Whichever side originates emits an outbound `create` to the other, with appropriate `source_app` provenance (`app.lifeglance` when lifeGLANCE owns the canonical record, dayGLANCE-native when dayGLANCE does). State changes flow via `notify`: date changes on either side propagate to the other; Goal completion in dayGLANCE marks the corresponding milestone as completed in lifeGLANCE.
 
-This consumer is planned after lifeGLANCE v1.7 (Android). The protocol itself supports the integration with no schema changes beyond the additions already in v1.0.0; the work is on each app's consumer side.
-
 ---
 
 ## Shared-protocol efficiencies
@@ -554,8 +554,8 @@ The following were originally listed as open and have been locked:
 
 The package and consumer implementations follow this sequence:
 
-1. `@glance-apps/intents@1.0.0` is published as the shared package containing schemas, normalizers, idempotency helpers, and WebDAV envelope helpers.
-2. dayGLANCE consumes the package, implements the shared `handleIntent` handler, ships the WebDAV transport and outbound `notify` emission.
-3. lastGLANCE consumes the package, wires outbound `create` and inbound `notify` consumption.
+1. DONE - `@glance-apps/intents` is published as the shared package containing schemas, normalizers, idempotency helpers, and WebDAV envelope helpers.
+2. DONE - dayGLANCE consumes the package, implements the shared `handleIntent` handler, ships the WebDAV transport and outbound `notify` emission.
+3. DONE - lastGLANCE consumes the package, wires outbound `create` and inbound `notify` consumption.
 4. Android intent transport and web URL transport ship in dayGLANCE as additive surfaces over the same `handleIntent`.
 5. lifeGLANCE adopts the package for bidirectional Goal↔Milestone integration.
