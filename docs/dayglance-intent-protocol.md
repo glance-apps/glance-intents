@@ -6,7 +6,7 @@
 
 dayGLANCE exposes a generalized intent protocol for external task creation, completion, navigation, and state queries, plus outbound notifications when tasks originating from external apps change state. The protocol is consumed by Tasker, by the web URL bar, and (planned) by lastGLANCE and any future GLANCE-family app that needs cross-app coordination.
 
-This is the universal cross-app contract for the GLANCE family. Apps coordinate with each other through this protocol and only this protocol — there is no separate hub layer or shared coordination service. Each GLANCE app remains fully usable without any other GLANCE app installed.
+This is the universal cross-app contract for the GLANCE family. Apps coordinate with each other through this protocol and only this protocol; there is no separate hub layer or shared coordination service. Each GLANCE app remains fully usable without any other GLANCE app installed.
 
 One schema, one handler, multiple transports. Inbound: source app doesn't matter: the handler validates the payload and executes the action. Outbound: dayGLANCE emits state changes for tasks that carry a source-app identifier, and consuming apps subscribe to events matching their own app id.
 
@@ -28,7 +28,7 @@ The WebDAV event log is the v1 cross-app transport for the GLANCE family. lastGL
 
 ## Versioning
 
-`schema_version` versions the entire protocol — envelope, all action payloads, all enum values. The implementing package `@glance-apps/intents` tracks the protocol version directly: package version `1.x.y` corresponds to protocol `schema_version` 1, package version `2.0.0` ships protocol `schema_version` 2 and is a coordinated multi-app upgrade.
+`schema_version` versions the entire protocol: envelope, all action payloads, all enum values. The implementing package `@glance-apps/intents` tracks the protocol version directly: package version `1.x.y` corresponds to protocol `schema_version` 1, package version `2.0.0` ships protocol `schema_version` 2 and is a coordinated multi-app upgrade.
 
 **Breaking changes (major bump):**
 
@@ -75,7 +75,7 @@ Five actions make up the protocol, in two directions. Inbound actions (`create`,
 
 ### Inbound: external → dayGLANCE
 
-### `create` — create a new task
+### `create`: create a new task
 
 Creates a task from any external source.
 
@@ -95,7 +95,9 @@ Creates a task from any external source.
 | `recurring` | String | No | RRULE syntax or simplified shorthand (see below) |
 | `source_app` | String | No | Reverse-DNS id of the creating app (e.g. `app.lastglance`); enables `notify` events back |
 | `source_entity_id` | String | No | Opaque id meaningful to the source app; round-tripped in `notify` payloads. Requires `source_app`. |
-| `assigned_user_ids` | String[] | No | List of sync user IDs the task is assigned to; enables cross-app multi-user filtering. |
+| `assigned_user_ids` | String[] | No | List of sync user IDs the task is assigned to; enables cross-app multi-user filtering. See multi-user note below. |
+
+**Multi-user note (`assigned_user_ids`):** dayGLANCE v3.0.0 shipped full multi-user support. Each device has a per-device sync identity; a shared user roster is synced via `GLANCE/glance-users.json` on the WebDAV endpoint. When `multiUserEnabled` is on, tasks with `assigned_user_ids` set are filtered so only the assigned users see them in Timeline and week/day views. Callers that don't participate in multi-user can omit `assigned_user_ids`; the field has no effect when `multiUserEnabled` is off.
 
 **Behavior:**
 
@@ -120,7 +122,7 @@ Case-insensitive on string values. Any other input is treated as unset and logge
 
 ---
 
-### `complete` — mark a task complete
+### `complete`: mark a task complete
 
 Marks a named task complete. Primary trigger for NFC workflows, voice automations, and any external completion signal.
 
@@ -142,7 +144,7 @@ Marks a named task complete. Primary trigger for NFC workflows, voice automation
 
 ---
 
-### `open` — deep link to a tab
+### `open`: deep link to a tab
 
 Brings dayGLANCE to the foreground on a specific tab.
 
@@ -164,7 +166,7 @@ Brings dayGLANCE to the foreground on a specific tab.
 
 ---
 
-### `query` — read state
+### `query`: read state
 
 Returns current state as `%dg_`-prefixed variables. Callers use these for dashboards, Stream Deck badges, TTS announcements, and conditional automation logic.
 
@@ -193,7 +195,7 @@ Returns current state as `%dg_`-prefixed variables. Callers use these for dashbo
 
 ### Outbound: dayGLANCE → external
 
-### `notify` — emit a task state change
+### `notify`: emit a task state change
 
 dayGLANCE emits `notify` when a task with `source_app` set changes state. Consuming apps subscribe to events matching their own app id and react accordingly. This is the mechanism that lets lastGLANCE log a CompletionEvent when a chore-originated task is checked off inside dayGLANCE, and it generalizes to any future GLANCE-family app that wants bidirectional sync.
 
@@ -214,7 +216,7 @@ dayGLANCE emits `notify` when a task with `source_app` set changes state. Consum
 | `due` | String | If applicable | Current `due` value; present on `rescheduled` and `updated` |
 | `previous_due` | String | If applicable | Prior `due` value; present on `rescheduled` |
 | `completed_at` | String | If applicable | Present on `completed`; equals `timestamp` |
-| `completed_by_user_id` | String | If applicable | Present on `completed`; sync ID of the user who completed the task. Enables receiving apps to attribute the completion. |
+| `completed_by_user_id` | String | If applicable | Present on `completed`; sync ID of the user who completed the task. Populated when `multiUserEnabled` is on; enables receiving apps (e.g. lastGLANCE) to attribute the completion to a specific user. |
 
 **Events:**
 
@@ -317,6 +319,8 @@ Top-level fields are transport metadata; the `payload` object carries the action
 **Reading:** PROPFIND on `/GLANCE/events/` with `Depth: 1`. Filter the returned listing by filename (process anything newer than the last-processed `event_id`). GET each new file, parse, dispatch through the handler.
 
 **Cursor tracking:** Each app stores its own "last processed event_id" locally (not in the WebDAV log). Polling reads the directory, filters out anything ≤ cursor, processes new events in chronological order, advances cursor. Idempotency is required (and built into the handler) so reprocessing a duplicate event is harmless.
+
+**Transient error handling:** Cursor advancement is conditional on the outcome of each file fetch and parse. On a transient error (a network failure such as `TypeError` or `AbortError`, or a 5xx response from the WebDAV server or proxy), the loop breaks without advancing the cursor. The file is retried on the next poll. Only a definitive outcome (successful processing, or a non-transient error such as a 4xx or a corrupt/unparseable file) advances the cursor past the file. This distinction is what makes the transport genuinely at-least-once rather than silently dropping events during flaky connectivity or cold-start proxy conditions.
 
 ### Polling cadence
 

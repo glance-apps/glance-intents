@@ -1,4 +1,4 @@
-# `@glance-apps/intents` — package planning doc
+# `@glance-apps/intents`: package planning doc
 
 The build plan, locked decisions, and phase sequencing for the GLANCE family's intent protocol package.
 
@@ -13,6 +13,15 @@ This doc is the source of truth for *how the package is being built*. The protoc
 `@glance-apps/intents@1.3.0` published. `@glance-apps/sync@1.1.0` unchanged from Phase 2.6 (`deriveKeyForSalt` export remains but is unused by Phase 2.7). dayGLANCE v2.12.0 and lastGLANCE v1.0.0 are the coordinated release.
 
 **Patch releases shipped (June 2026).** `@glance-apps/intents@1.3.1` adds an optional `assigned_user_ids` (`string[]`) field to `CreateSchema`, enabling cross-app multi-user filtering. `@glance-apps/intents@1.3.2` adds an optional `completed_by_user_id` (`string`) field to `NotifySchema`, enabling receiving apps to attribute task completions to specific users. Both are additive, non-breaking minor additions consistent with the versioning policy.
+
+**dayGLANCE v3.0.0 shipped (June 2026).** This is the release that put `assigned_user_ids` and `completed_by_user_id` to work. Full multi-user support shipped: per-device sync identity, shared user roster synced via `GLANCE/glance-users.json` on the WebDAV endpoint (separate from the intents event log), task assignment, and per-user visibility filtering in Timeline/week/day views. `@glance-apps/sync` upgraded to `1.1.2`. Multi-device intent dedup was also hardened in this release: intent task creation moved to deterministic task IDs derived from the source triple (`intentKey`), `transitionId` is stamped on local mutations for multi-device dedup, and a poll-lock guard was added against StrictMode double-mount. These supersede the `applyEngineData` preserve-from-prev filter fix described in the Phase 2.7 bugs section, which was an earlier partial fix to the same class of problem.
+
+**lastGLANCE continued shipping post-v1.0.0 (June 2026).** Intents-relevant additions in subsequent releases:
+
+- **v1.5.0:** Poller reliability fixes. Transient network errors (`TypeError`, `AbortError`) no longer advance the cursor past a file; the file is retried on the next poll. Previously, a network-level failure on `getFile` would log an activity error and permanently skip the file. Also fixed: false abort errors in the intent emitter when a PWA goes to background mid-request; the `visibilitychange` listener now fires `checkAndNotify` only on the visible transition, avoiding in-flight fetches being aborted on hide.
+- **v1.5.1:** 5xx responses from the WebDAV proxy are now treated as transient (same cursor-hold behavior as network errors). Also added: a `→ dG` button in the chore detail modal (see Phase 3 notes below).
+
+Current versions: dayGLANCE v3.0.0, lastGLANCE v1.5.1, `@glance-apps/intents@1.3.2`, `@glance-apps/sync@1.1.2`.
 
 **Phase 4** (Android intent transport + web URL transport) has not started.
 
@@ -78,7 +87,7 @@ V1 return variables (10 total):
 
 Additional variables can be added in minor versions. Consumers that don't recognize a variable safely ignore it.
 
-**`schema_version` semantics:** `schema_version` versions the entire protocol — envelope + all action payloads + all enum values. Package version tracks protocol version directly: package 1.x.y → protocol v1, package 2.0.0 → protocol v2.
+**`schema_version` semantics:** `schema_version` versions the entire protocol: envelope + all action payloads + all enum values. Package version tracks protocol version directly: package 1.x.y → protocol v1, package 2.0.0 → protocol v2.
 
 Breaking changes (major bump required):
 
@@ -93,7 +102,7 @@ Breaking changes (major bump required):
 Non-breaking changes (minor bump):
 
 - Adding an optional field
-- Adding a new enum value to a forward-compatible enum (where the spec explicitly says consumers should tolerate unknown values — `notify.event` qualifies; `priority` does not because callers send those values)
+- Adding a new enum value to a forward-compatible enum (where the spec explicitly says consumers should tolerate unknown values: `notify.event` qualifies; `priority` does not because callers send those values)
 - Adding a new action
 - Adding a new return variable to `query`
 
@@ -132,7 +141,7 @@ Eight PRs in the intents repo:
 | #1 | Scaffold: package.json, tsconfig, Vitest, build pipeline, README skeleton, CI | Mirrors `@glance-apps/sync` conventions |
 | #2 | `constants/` module: all enums and string constants, no logic | |
 | #3 | `schemas/v1/`: Zod schemas for all 5 action payloads + envelope | Includes optional `entity_type` in notify |
-| #4 | `normalize/`: priority, recurring, tags, due — each with unit tests | |
+| #4 | `normalize/`: priority, recurring, tags, due; each with unit tests | |
 | #5 | `idempotency/`: createKey + eventId, with unit tests | |
 | #6 | `webdav/`: filename parser/builder, envelope build/parse, with unit tests | |
 | #7 | `types/`: re-exports, plus a public-API surface review pass | |
@@ -162,7 +171,7 @@ WebDAV endpoint is configurable independently from the sync endpoint, mirroring 
 
 ### Phase 2.5: Optional encryption for WebDAV intent envelopes
 
-**Shipped in dayGLANCE v2.11.0 (2026-05-24) and lastGLANCE v0.1.13 (testing). Phase 2.6 fixes a design flaw found in post-ship integration testing — see below.**
+**Shipped in dayGLANCE v2.11.0 (2026-05-24) and lastGLANCE v0.1.13 (testing). Phase 2.6 fixes a design flaw found in post-ship integration testing (see below).**
 
 Added after Phases 1-2 shipped to address the privacy concern that WebDAV intent files can sit on a third-party server (Koofr, Box, Hetzner) in plaintext. Self-hosted users have full control over their WebDAV; users on hosted WebDAV providers do not. Bringing intents encryption to parity with cloud sync's optional encryption closes that gap.
 
@@ -186,12 +195,12 @@ Affects both the `@glance-apps/intents` package (envelope format + helpers) and 
 - **Async only on the encrypted path.** `buildEncryptedEnvelope(payload, key): Promise<EncryptedEnvelope>` and `parseEncryptedEnvelope(file, key): Promise<Envelope>` are async because Web Crypto is async. Plaintext functions stay sync.
 - **Failure signaling: typed errors thrown, not nullable returns.** Encrypted-path functions throw exported error classes: `NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`, and (build-side) `InvalidPayloadError` (for attempting to encrypt a non-`create`/`notify` action). Consumers wrap in try/catch and branch on error type. Each error class maps directly to a distinct activity-log entry on the dayGLANCE side.
 
-#### Package PRs (`@glance-apps/intents`) — **complete**
+#### Package PRs (`@glance-apps/intents`): **complete**
 
 | PR | Scope | Status |
 |---|---|---|
 | #9 | `schemas/v1/`: extend envelope schema with optional `encrypted: true`, `iv` (base64), and `payload_ciphertext` (base64) fields. When `encrypted` is true, structural payload fields move into the encrypted blob. Validators accept both forms; reject encrypted envelopes for action types other than `create` and `notify`. | ✅ |
-| #10 | `crypto/`: AES-GCM encrypt/decrypt helpers. Key parameter is a `CryptoKey` (consumer passes it in; package doesn't do passphrase derivation — that lives in each consumer's existing sync-encryption code). Exported error classes for failure modes. | ✅ |
+| #10 | `crypto/`: AES-GCM encrypt/decrypt helpers. Key parameter is a `CryptoKey` (consumer passes it in; package doesn't do passphrase derivation, which lives in each consumer's existing sync-encryption code). Exported error classes for failure modes. | ✅ |
 | #11 | `webdav/`: add `buildEncryptedEnvelope` and `parseEncryptedEnvelope` (async, take a `CryptoKey`). Existing `buildEnvelope` and `parseEnvelope` remain synchronous and plaintext-only. | ✅ |
 | #12 | Bump package to `1.1.0`; CHANGELOG entry; `npm publish`. | ✅ Published. |
 
@@ -199,7 +208,7 @@ Affects both the `@glance-apps/intents` package (envelope format + helpers) and 
 
 **Pre-work resolved.** Investigation confirmed `@glance-apps/sync@1.0.1` does not currently export the derived `CryptoKey`. The key is held in module-scoped state (`_sessionKey` in `crypto.js`) as a non-extractable `CryptoKey`, with `hasEncryptionReady()` exposed but no getter for the key itself. The derivation pipeline is clean: PBKDF2-SHA-256 at 310,000 iterations, AES-256-GCM, non-extractable at every `importKey` site (verified).
 
-**Resolution: Option B — add a `getSessionKey()` getter to `@glance-apps/sync`.** One-line addition that surfaces the existing `_sessionKey` reference. The key remains non-extractable, so callers receive an opaque `CryptoKey` reference they can pass to Web Crypto operations but cannot extract raw bytes from. No change to derivation, storage, or lifecycle. The same getter serves both the dayGLANCE intents emitter and the lastGLANCE Phase 3 intents emitter; doing the structural work once benefits both repos.
+**Resolution: Option B, add a `getSessionKey()` getter to `@glance-apps/sync`.** One-line addition that surfaces the existing `_sessionKey` reference. The key remains non-extractable, so callers receive an opaque `CryptoKey` reference they can pass to Web Crypto operations but cannot extract raw bytes from. No change to derivation, storage, or lifecycle. The same getter serves both the dayGLANCE intents emitter and the lastGLANCE Phase 3 intents emitter; doing the structural work once benefits both repos.
 
 **Resulting precursor PR in `@glance-apps/sync`:**
 
@@ -223,7 +232,7 @@ if (hasEncryptionReady()) {
 }
 ```
 
-The two-check pattern (settings-time `intentsConfig.encryptionEnabled` plus runtime `hasEncryptionReady()`) handles the case where intents encryption is configured-on but no key is currently cached in session (e.g., new device that hasn't entered the passphrase yet). When `hasEncryptionReady()` is false but encryption is configured, the emitter falls back to plaintext (defensible default — events still flow) or queues the event for later (more correct but more state to manage). PR #14 should pick one and document the choice in the PR description; default recommendation is fall back to plaintext with an activity-log entry noting the configuration drift, since the absence of a session key typically means the user hasn't completed setup on this device yet and the alternative (silent queueing) is harder to diagnose.
+The two-check pattern (settings-time `intentsConfig.encryptionEnabled` plus runtime `hasEncryptionReady()`) handles the case where intents encryption is configured-on but no key is currently cached in session (e.g., new device that hasn't entered the passphrase yet). When `hasEncryptionReady()` is false but encryption is configured, the emitter falls back to plaintext (defensible default: events still flow) or queues the event for later (more correct but more state to manage). PR #14 should pick one and document the choice in the PR description; default recommendation is fall back to plaintext with an activity-log entry noting the configuration drift, since the absence of a session key typically means the user hasn't completed setup on this device yet and the alternative (silent queueing) is harder to diagnose.
 
 **Shipped in dayGLANCE v2.11.0.** All five PRs landed and are in production. The encryption toggle is functional but cannot succeed cross-app until Phase 2.6 ships; the path is dormant for any user who flips it on because lastGLANCE is not yet released to a wider audience. Activity-log copy from PR #16 will be revised in Phase 2.6 to reflect the new semantics of `WrongKeyError`.
 
@@ -235,11 +244,11 @@ The two-check pattern (settings-time `intentsConfig.encryptionEnabled` plus runt
 | #15 | Poller (Phase 2 PR #7): inspect envelope; if `encrypted: true`, call `parseEncryptedEnvelope` with the `CryptoKey`; if plaintext, call `parseEnvelope`. On any typed error from the encrypted path (`NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`), log distinct activity-log entry and skip event. |
 | #16 | Activity log (Phase 2 PR #10): render distinct activity-log entries per error class. `NoKeyError` → "encryption not configured." `WrongKeyError` → "decryption failed (wrong key)." `NotEncryptedError` and `MalformedEnvelopeError` are defensive-only (shouldn't happen in normal operation) and surface as warnings if they do fire. |
 
-**Critical-path subset for Phase 3:** historical — `@glance-apps/sync@1.0.2` published before dayGLANCE PR #12 landed. dayGLANCE PRs #12-16 shipped in v2.11.0. lastGLANCE Phase 3 PRs shipped in v0.1.13.
+**Critical-path subset for Phase 3:** historical: `@glance-apps/sync@1.0.2` published before dayGLANCE PR #12 landed. dayGLANCE PRs #12-16 shipped in v2.11.0. lastGLANCE Phase 3 PRs shipped in v0.1.13.
 
 ### Phase 3: lastGLANCE adopts the protocol
 
-**Shipped in lastGLANCE v0.1.13 (testing).** All 13 PRs landed. The intents-encryption surface (PRs #11-13) is functional but inherits the same cross-app key-mismatch issue as dayGLANCE; revised in Phase 2.6 (see below — appears after this section because it was discovered during post-Phase-3 testing).
+**Shipped in lastGLANCE v0.1.13 (testing).** All 13 PRs landed. The intents-encryption surface (PRs #11-13) is functional but inherits the same cross-app key-mismatch issue as dayGLANCE; revised in Phase 2.6 (see below; appears after this section because it was discovered during post-Phase-3 testing).
 
 Starts when dayGLANCE PRs #3, #7, #9 are merged (the starred critical path above) **and** Phase 2.5 package PRs #9-12 are published (encryption support in the package).
 
@@ -263,11 +272,13 @@ v1 ignores `uncompleted` events. If a user wants to remove a completion that cam
 
 The three outbound trigger surfaces (PRs #4, #5, #6) all converge on the shared emitter from PR #3. UI surfaces are additive; the per-instance card and notification buttons are the primary discoverability, the per-chore toggle is the set-and-forget option. Default for the toggle is off.
 
+A fourth outbound trigger surface shipped in lastGLANCE v1.5.1: a `→ dG` button inside the chore detail modal. Unlike the card-level button (threshold-gated), the modal button appears whenever the dayGLANCE integration is configured, allowing the user to proactively schedule any chore to dayGLANCE even when it isn't overdue or at threshold. It uses the same shared emitter from PR #3 and the same idle/saving/done/error state machine as the ChoreRow button.
+
 Intents encryption (PRs #11-13) is additive on top of the integration. Plaintext intents work end-to-end without it; the encryption layer activates only when the user enables both cloud sync encryption and intents encryption. Consumers handle plaintext and encrypted events transparently in the same directory.
 
 ### Phase 2.6: Per-envelope salt (fixes the Phase 2.5 cross-app key mismatch)
 
-**Superseded by Phase 2.7.** Phase 2.6 shipped as feature branches in both apps and successfully resolved the cross-app key mismatch from Phase 2.5, but introduced a passphrase-availability problem that broke the set-and-forget UX. The PBKDF2-per-envelope model requires the cloud sync passphrase in memory at every emit and poll; the passphrase is not persisted across app sessions (only the derived sync key is). This forced users to re-enter their passphrase every session for intents to work — unacceptable. Phase 2.7 replaces PBKDF2-per-envelope with HKDF-per-envelope against an intents-owned root key; passphrase needed only at intents-encryption setup, never again. Phase 2.6 design retained below for history; do not implement.
+**Superseded by Phase 2.7.** Phase 2.6 shipped as feature branches in both apps and successfully resolved the cross-app key mismatch from Phase 2.5, but introduced a passphrase-availability problem that broke the set-and-forget UX. The PBKDF2-per-envelope model requires the cloud sync passphrase in memory at every emit and poll; the passphrase is not persisted across app sessions (only the derived sync key is). This forced users to re-enter their passphrase every session for intents to work, which was unacceptable. Phase 2.7 replaces PBKDF2-per-envelope with HKDF-per-envelope against an intents-owned root key; passphrase needed only at intents-encryption setup, never again. Phase 2.6 design retained below for history; do not implement.
 
 #### Why this exists
 
@@ -276,7 +287,7 @@ Phase 2.5 shipped with the assumption that sync's session key (`getSessionKey()`
 Investigation into `@glance-apps/sync@1.0.3` source (`src/crypto.js`) revealed the cause:
 
 - Each app generates its own random 16-byte salt via `crypto.getRandomValues` at first encryption (`crypto.js:180`).
-- Each app stores its salt in its own IndexedDB (`KEY_STORE = 'keys'`, record id `sync-key`, in a database named by the caller-supplied `cryptoDBName` — distinct per app).
+- Each app stores its salt in its own IndexedDB (`KEY_STORE = 'keys'`, record id `sync-key`, in a database named by the caller-supplied `cryptoDBName`, distinct per app).
 - The salt is therefore per-app-instance, not shared. Two apps + same passphrase + independently-random salts = two different `CryptoKey`s.
 - Sync itself dodges this for its own files by **embedding the salt in the first 16 bytes of every encrypted file** (`crypto.js:254,277`) and re-deriving the key from the passphrase + extracted salt on read (`crypto.js:300-320`). The cached session key is a hot-path optimization for the common case of an app reading its own files; the *real* key for any file is derivable from passphrase + the salt in that file.
 
@@ -299,11 +310,11 @@ This adds 16 bytes (24 base64 chars) per encrypted envelope. Negligible relative
 - **Key derivation happens on both emit and consume sides, per envelope.** The cached session key from `getSessionKey()` is not used in the cross-app encrypted path. Sync's cached session key remains for sync's own purposes.
 - **`@glance-apps/sync` exposes `deriveKeyForSalt(salt: Uint8Array): Promise<CryptoKey>`.** Takes a salt, runs PBKDF2 against the cached passphrase, returns a non-extractable `CryptoKey`. Sync's existing derivation parameters are preserved: PBKDF2-SHA-256, 310,000 iterations, AES-256-GCM, non-extractable. (`getSessionKey()` from `1.0.2` remains exported; it's just not what intents uses going forward.)
 - **Passphrase stays inside sync.** The intents package never sees the passphrase; it only ever calls `deriveKeyForSalt(salt)` on sync and receives a `CryptoKey` back. This preserves the boundary where sync owns passphrase lifecycle and key derivation.
-- **Intents-package API: `buildEncryptedEnvelope` and `parseEncryptedEnvelope` take a `deriveKey` callback rather than a `CryptoKey`.** Signature: `deriveKey: (salt: Uint8Array) => Promise<CryptoKey>`. The emitter passes `sync.deriveKeyForSalt`. The package generates the salt internally on build, extracts it from the envelope on parse, and calls the callback to get the key for that salt. This keeps the package decoupled from sync — any consumer that can produce a `CryptoKey` for a given salt can use it.
+- **Intents-package API: `buildEncryptedEnvelope` and `parseEncryptedEnvelope` take a `deriveKey` callback rather than a `CryptoKey`.** Signature: `deriveKey: (salt: Uint8Array) => Promise<CryptoKey>`. The emitter passes `sync.deriveKeyForSalt`. The package generates the salt internally on build, extracts it from the envelope on parse, and calls the callback to get the key for that salt. This keeps the package decoupled from sync: any consumer that can produce a `CryptoKey` for a given salt can use it.
 - **Envelope shape:** plaintext envelope retains `schema_version`, `event_id`, `emitted_at`, `emitted_by`, plus the hoisted `source_app`, `source_entity_id`, `due` fields, plus new fields `encrypted: true`, `salt` (base64, 16 bytes), `iv` (base64, 12 bytes), and `payload_ciphertext` (base64). The plaintext-header fields remain unencrypted so consumers can filter by `source_app`, compute idempotency keys, and order/GC events without bulk decryption.
 - **Versioning: `@glance-apps/intents@1.2.0`.** Additive minor bump. Plaintext envelopes still parse. `@glance-apps/intents@1.1.0` encrypted envelopes (no `salt` field) become legacy; package validators reject them with `MalformedEnvelopeError` (no `salt` present in an `encrypted: true` envelope). Since 1.1.0 encrypted envelopes never worked cross-app in practice, no real-world data is at risk; the only such envelopes that exist are from integration testing and can be wiped.
 - **`@glance-apps/sync`: minor bump to `1.1.0`** for the `deriveKeyForSalt` export.
-- **Error classes unchanged.** `NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`, `InvalidPayloadError` keep their meanings. `WrongKeyError` becomes rare-to-vanishing in practice once per-envelope salt is in place — it would fire only on actual passphrase mismatch between apps, not on the salt-mismatch case that motivated this phase.
+- **Error classes unchanged.** `NoKeyError`, `WrongKeyError`, `NotEncryptedError`, `MalformedEnvelopeError`, `InvalidPayloadError` keep their meanings. `WrongKeyError` becomes rare-to-vanishing in practice once per-envelope salt is in place; it would fire only on actual passphrase mismatch between apps, not on the salt-mismatch case that motivated this phase.
 
 #### Package PRs (`@glance-apps/intents`)
 
@@ -332,7 +343,7 @@ Must publish before the dayGLANCE Phase 2.6 PRs below.
 | #18 | Settings UI: revised copy on the intents encryption toggle. Replaces the Phase 2.5 "uses cloud sync passphrase" line with "Uses your cloud sync passphrase. Each event is independently re-keyed; no setup beyond entering the passphrase." Same gating logic. |
 | #19 | Emitter (Phase 2 PR #9 / Phase 2.5 PR #14): when intents encryption is on, pass `sync.deriveKeyForSalt` to `buildEncryptedEnvelope` instead of the cached `CryptoKey`. Wrap in try/catch for typed errors; surface failures to activity log. Same plaintext-fallback behavior as the Phase 2.5 emitter for `hasEncryptionReady()` false. |
 | #20 | Poller (Phase 2 PR #7 / Phase 2.5 PR #15): when envelope is `encrypted: true`, call `parseEncryptedEnvelope(raw, sync.deriveKeyForSalt)`. On any typed error from the encrypted path, log distinct activity-log entry and skip event. |
-| #21 | Activity log: copy revision. `WrongKeyError` becomes "decryption failed (wrong passphrase — verify same passphrase used in both apps)." Other error-class copy unchanged from Phase 2.5 PR #16. |
+| #21 | Activity log: copy revision. `WrongKeyError` becomes "decryption failed (wrong passphrase: verify same passphrase used in both apps)." Other error-class copy unchanged from Phase 2.5 PR #16. |
 
 #### lastGLANCE PRs (target version: v0.1.14)
 
@@ -362,7 +373,7 @@ Phase 2.6 (per-envelope salt, PBKDF2-per-envelope) successfully resolved the Pha
 
 #### Resolution: intents owns a long-lived root key, derived once at setup, reused via HKDF per envelope
 
-Phase 2.7 gives intents its own long-lived root key, derived once when the user enables the intents encryption toggle. That root key gets cached non-extractably in IndexedDB exactly like sync's session key. Per envelope, the encryption key is derived by HKDF from the cached root key plus a fresh per-envelope salt — fast (single hash, not 310k PBKDF2 iterations) and requires only the cached root key, no passphrase. Both apps derive the same per-envelope key from the same root key + the same envelope salt.
+Phase 2.7 gives intents its own long-lived root key, derived once when the user enables the intents encryption toggle. That root key gets cached non-extractably in IndexedDB exactly like sync's session key. Per envelope, the encryption key is derived by HKDF from the cached root key plus a fresh per-envelope salt. This is fast (single hash, not 310k PBKDF2 iterations) and requires only the cached root key, no passphrase. Both apps derive the same per-envelope key from the same root key + the same envelope salt.
 
 Cross-app root-key agreement is achieved by storing a shared intents-encryption salt on the WebDAV endpoint, not in either app's IndexedDB. First app to enable intents encryption against a given WebDAV endpoint writes the salt; second app reads it on setup. Same passphrase + same shared salt = same root key in both apps. The passphrase is used at setup time only; it is discarded from intents' memory after the root key is derived and cached.
 
@@ -370,25 +381,25 @@ After setup, no operation in intents requires the cloud sync passphrase. The cac
 
 #### Sync is not modified
 
-Sync's session key, its IndexedDB schema, its salt model, its PBKDF2 parameters, and its file-encryption pipeline are unchanged. The only thing intents asks of sync at runtime is access to the cloud sync passphrase *at intents-encryption setup* — specifically, when the user turns the intents encryption toggle on, intents needs the passphrase available right then to derive its root key. After that, intents has its own cached root key and never touches sync's key material or passphrase again.
+Sync's session key, its IndexedDB schema, its salt model, its PBKDF2 parameters, and its file-encryption pipeline are unchanged. The only thing intents asks of sync at runtime is access to the cloud sync passphrase *at intents-encryption setup*. Specifically, when the user turns the intents encryption toggle on, intents needs the passphrase available right then to derive its root key. After that, intents has its own cached root key and never touches sync's key material or passphrase again.
 
-If the user is enabling intents encryption in the same session in which they configured sync encryption, the passphrase is already in memory and the setup is seamless. If the user enabled sync encryption in a prior session and is enabling intents encryption now (with passphrase not in memory), intents prompts for the passphrase as part of the toggle-on flow — same UX as configuring sync encryption itself. After this one-time prompt, the user is set-and-forget.
+If the user is enabling intents encryption in the same session in which they configured sync encryption, the passphrase is already in memory and the setup is seamless. If the user enabled sync encryption in a prior session and is enabling intents encryption now (with passphrase not in memory), intents prompts for the passphrase as part of the toggle-on flow, the same UX as configuring sync encryption itself. After this one-time prompt, the user is set-and-forget.
 
 #### Locked decisions
 
 - **Intents-owned root key, cached non-extractably in IndexedDB.** Separate from sync's cached key. Lives in an intents-owned IndexedDB database; does not co-mingle with sync's storage.
 - **Shared root salt stored on WebDAV.** First app to enable intents encryption writes the salt to a file in the WebDAV intents directory (filename and exact location TBD by Code; the package planning doc is not the right place to fix the byte layout). Subsequent apps read the salt from there during their own intents-encryption setup. The salt is associated with the WebDAV-shared intents store, not with any one client.
-- **Root key derivation:** PBKDF2-SHA-256, 310,000 iterations, AES-256-bits of output, against the cloud sync passphrase + the shared WebDAV-stored salt. Matches sync's PBKDF2 parameters for consistency. Output imported as a non-extractable `CryptoKey` with `usages: ['deriveKey']` so HKDF can derive envelope keys from it without ever exposing the raw key material. (If HKDF-from-non-extractable-key has a Web Crypto API gotcha here, see the Code prompt's pre-work step — adjust the import usages or design accordingly.)
-- **Per-envelope key derivation:** HKDF-SHA-256 with the cached intents root key as input keying material, the per-envelope salt as salt, and a fixed info string (e.g. `"glance-intents-envelope-v1"`). Output: a non-extractable AES-256-GCM `CryptoKey` with `usages: ['encrypt', 'decrypt']`. Fresh per-envelope salt generated via `crypto.getRandomValues(new Uint8Array(16))`, embedded in the envelope alongside `iv` and `payload_ciphertext` — same envelope shape as Phase 2.6.
+- **Root key derivation:** PBKDF2-SHA-256, 310,000 iterations, AES-256-bits of output, against the cloud sync passphrase + the shared WebDAV-stored salt. Matches sync's PBKDF2 parameters for consistency. Output imported as a non-extractable `CryptoKey` with `usages: ['deriveKey']` so HKDF can derive envelope keys from it without ever exposing the raw key material. (If HKDF-from-non-extractable-key has a Web Crypto API gotcha here, see the Code prompt's pre-work step; adjust the import usages or design accordingly.)
+- **Per-envelope key derivation:** HKDF-SHA-256 with the cached intents root key as input keying material, the per-envelope salt as salt, and a fixed info string (e.g. `"glance-intents-envelope-v1"`). Output: a non-extractable AES-256-GCM `CryptoKey` with `usages: ['encrypt', 'decrypt']`. Fresh per-envelope salt generated via `crypto.getRandomValues(new Uint8Array(16))`, embedded in the envelope alongside `iv` and `payload_ciphertext`, the same envelope shape as Phase 2.6.
 - **Envelope shape unchanged from Phase 2.6.** The `salt` field is still present and still 16 bytes; what changes is how the consumer derives the key from it (HKDF against cached root key, not PBKDF2 against passphrase).
 - **Versioning:** `@glance-apps/intents@1.3.0` (shipped; current latest is `1.3.2`). Additive minor bump for the API change (callback semantics change but signature stays similar). Plaintext envelopes still parse. Phase 2.6 encrypted envelopes (no migration path to Phase 2.7 keys, since they were derived from a different process) are wiped manually before testing; no production data exists.
-- **Intents-package API:** `buildEncryptedEnvelope` and `parseEncryptedEnvelope` continue to take a `deriveKey` callback `(salt: Uint8Array) => Promise<CryptoKey>`. The callback's *implementation* changes (it now runs HKDF against a cached root key instead of PBKDF2 against the passphrase), but the package API stays the same. This is intentional — the package doesn't care how the key is derived, only that the consumer can produce one for a given salt.
+- **Intents-package API:** `buildEncryptedEnvelope` and `parseEncryptedEnvelope` continue to take a `deriveKey` callback `(salt: Uint8Array) => Promise<CryptoKey>`. The callback's *implementation* changes (it now runs HKDF against a cached root key instead of PBKDF2 against the passphrase), but the package API stays the same. This is intentional: the package doesn't care how the key is derived, only that the consumer can produce one for a given salt.
 - **Setup flow:** the intents encryption toggle, when turned on, runs the setup sequence: ensure cloud sync encryption is enabled (gating); ensure passphrase is in memory (prompt if not); fetch or write the shared root salt on WebDAV; derive root key; cache root key in IndexedDB; discard passphrase from intents' memory. The toggle reflects success or failure of this sequence.
 - **Error class additions:** consider adding `SetupRequiredError` or similar to distinguish "intents encryption toggle is on but root key not cached" from `NoKeyError` (current Phase 2.6 catch-all). Specifics deferred to Code.
 
 #### Migration / cleanup
 
-- **For the developer's testing setup:** before Phase 2.7 testing begins, manually delete all encrypted envelopes from `/GLANCE/events/` (the shared WebDAV intents directory). They lack any Phase 2.7-compatible key material and will fail. Also delete any IndexedDB intents-related state in both apps. Turn off the intents encryption toggle in both apps, then turn it back on as part of Phase 2.7 testing — first toggle-on writes the shared salt, second toggle-on reads it.
+- **For the developer's testing setup:** before Phase 2.7 testing begins, manually delete all encrypted envelopes from `/GLANCE/events/` (the shared WebDAV intents directory). They lack any Phase 2.7-compatible key material and will fail. Also delete any IndexedDB intents-related state in both apps. Turn off the intents encryption toggle in both apps, then turn it back on as part of Phase 2.7 testing: first toggle-on writes the shared salt, second toggle-on reads it.
 - **For eventual public release:** no production migration story is needed because no end user has ever successfully used intents encryption (Phase 2.5 had cross-app mismatch, Phase 2.6 was UX-broken before public release). Phase 2.7 is the first version that ships to users in a working state.
 
 #### Package PRs (`@glance-apps/intents`)
@@ -411,7 +422,7 @@ In each app:
 | Intents encryption setup | New setup flow on toggle-on: prompt for passphrase if not in memory, fetch-or-write shared salt on WebDAV, derive root key, cache root key in IndexedDB, discard passphrase. |
 | Emitter | `deriveKey` callback now runs HKDF against cached intents root key (not PBKDF2 against passphrase). If root key isn't cached, surface activity-log error matching the new "setup not complete" semantics. Do not fall back to plaintext. |
 | Poller | Same as emitter on the read side. |
-| Settings UI | Toggle copy revised to reflect the one-time setup model: "Uses your cloud sync passphrase. Set up once; remains active across sessions." Or similar — copy decision deferred. |
+| Settings UI | Toggle copy revised to reflect the one-time setup model: "Uses your cloud sync passphrase. Set up once; remains active across sessions." Or similar (copy decision deferred). |
 | Activity log | Error copy revised to reflect the new failure modes: "Intents encryption setup incomplete" replaces "passphrase not available" for the common case. |
 
 #### Test plan
@@ -425,11 +436,11 @@ In each app:
 
 Two downstream bugs surfaced once Phase 2.7's encryption layer started actually working. Both are pre-existing issues that were masked while the encryption layer was failing upstream. Both are fixed in dayGLANCE v2.12.0.
 
-**Bug 1: `applyEngineData` race dropped intent-created tasks (dayGLANCE PR #905).** dayGLANCE's `applyEngineData` (called when remote sync data arrives) used functional state updaters with a preserve-from-prev filter that only kept tasks flagged `_native` or `imported`. Intent-created tasks carry `_intentKey` but not those flags. If a sync download fired in the ~5-second window between intent creation and first upload, the new task was silently dropped — the activity log entry still showed a clean `create` because the handler had returned `ok`, but the task never persisted. Fix: extend the preserve-from-prev filter in all three `applyEngineData` setters (`tasks`, `unscheduledTasks`, `recurringTasks`) to also keep `_intentKey` tasks. Delete propagation in dayGLANCE is tombstone-based (`recycleBin` + `deletedTaskIds`), so the broader filter doesn't accidentally resurrect deleted tasks — a deleted task isn't in `prev` at all.
+**Bug 1: `applyEngineData` race dropped intent-created tasks (dayGLANCE PR #905).** dayGLANCE's `applyEngineData` (called when remote sync data arrives) used functional state updaters with a preserve-from-prev filter that only kept tasks flagged `_native` or `imported`. Intent-created tasks carry `_intentKey` but not those flags. If a sync download fired in the ~5-second window between intent creation and first upload, the new task was silently dropped; the activity log entry still showed a clean `create` because the handler had returned `ok`, but the task never persisted. Fix: extend the preserve-from-prev filter in all three `applyEngineData` setters (`tasks`, `unscheduledTasks`, `recurringTasks`) to also keep `_intentKey` tasks. Delete propagation in dayGLANCE is tombstone-based (`recycleBin` + `deletedTaskIds`), so the broader filter doesn't accidentally resurrect deleted tasks; a deleted task isn't in `prev` at all. **Note:** v3.0.0 superseded this with a more robust approach: intent task IDs are now deterministic (derived from the source triple via `intentKey`), `transitionId` is stamped on local mutations for multi-device dedup, and a poll-lock guard prevents StrictMode double-mount from triggering duplicate processing. The preserve-from-prev fix remains but is now a secondary safety net rather than the primary mechanism.
 
-**Bug 2: tray-mode poller silently consumed events (dayGLANCE).** dayGLANCE's Electron tray popup runs in a separate renderer process with its own React state. Its `useIntentPoller` ran the same poll cycle as the main window, dispatched `create` actions, wrote `setTasks` updates, and advanced the WebDAV cursor — but `useSaveOnChange` is suppressed in tray mode, so the state updates never persisted. The cursor advance was permanent. The main window's next poll saw `pending: 0` (events already cursor-advanced) and never processed them. The activity log entries the user saw came from the tray's ephemeral state and were never written to actual storage. Fix: add an `isTrayMode` early-return guard to `useIntentPoller`, mirroring the existing guard in `useSaveOnChange`. The tray popup is an observation surface, not a sync participant.
+**Bug 2: tray-mode poller silently consumed events (dayGLANCE).** dayGLANCE's Electron tray popup runs in a separate renderer process with its own React state. Its `useIntentPoller` ran the same poll cycle as the main window, dispatched `create` actions, wrote `setTasks` updates, and advanced the WebDAV cursor, but `useSaveOnChange` is suppressed in tray mode, so the state updates never persisted. The cursor advance was permanent. The main window's next poll saw `pending: 0` (events already cursor-advanced) and never processed them. The activity log entries the user saw came from the tray's ephemeral state and were never written to actual storage. Fix: add an `isTrayMode` early-return guard to `useIntentPoller`, mirroring the existing guard in `useSaveOnChange`. The tray popup is an observation surface, not a sync participant.
 
-The lastGLANCE side was audited for a symmetric race against the dayGLANCE `applyEngineData` pattern and found to be structurally safe — lastGLANCE uses a purely additive merge that doesn't have preserve-from-prev allowlists, so intent-created CompletionEvents can't be dropped by the merge. lastGLANCE has no tray popup so the second bug doesn't apply.
+The lastGLANCE side was audited for a symmetric race against the dayGLANCE `applyEngineData` pattern and found to be structurally safe: lastGLANCE uses a purely additive merge that doesn't have preserve-from-prev allowlists, so intent-created CompletionEvents can't be dropped by the merge. lastGLANCE has no tray popup so the second bug doesn't apply.
 
 ### Phase 4: Android intent transport + web URL transport (parallel-eligible)
 
@@ -491,7 +502,7 @@ Phases 1, 2, 2.5, 3, and 2.7 shipped. Phase 2.6 was a dead-end branch superseded
 
 `@glance-apps/intents@1.3.0` (HKDF-based key derivation) → dayGLANCE PRs (intents-encryption setup flow + emitter + poller + UI) + lastGLANCE counterparts → downstream bug fixes (PR #905 race fix, tray-mode poller guard) → coordinated release of dayGLANCE v2.12.0 + lastGLANCE v1.0.0.
 
-Sync was not modified in Phase 2.7. `@glance-apps/sync@1.1.0` (the Phase 2.6 release) remains valid but its `deriveKeyForSalt` export is unused by Phase 2.7 — left in place for any other consumer that may want it.
+Sync was not modified in Phase 2.7. `@glance-apps/sync@1.1.0` (the Phase 2.6 release) remains valid but its `deriveKeyForSalt` export is unused by Phase 2.7, left in place for any other consumer that may want it.
 
 Phase 4 transports (Android intent + web URL) have not started.
 
@@ -499,11 +510,11 @@ Phase 4 transports (Android intent + web URL) have not started.
 
 - **`uncompleted` semantics if added later**: defensive: ignore for v1 in lastGLANCE; revisit if user feedback demands handling.
 - **Milestone completion semantics in lifeGLANCE** (date vs badge): resolve when scoping Phase 5. Doesn't affect the protocol.
-- **Activity log UX for decryption failures** in dayGLANCE (Phase 2.5 PR #16): visual treatment for "skipped, couldn't decrypt" entries — distinct from successful events, surfaces enough info for the user to diagnose (timestamp, source_app, "decryption failed: no key" vs "decryption failed: wrong key") without leaking sensitive content.
+- **Activity log UX for decryption failures** in dayGLANCE (Phase 2.5 PR #16): visual treatment for "skipped, couldn't decrypt" entries, distinct from successful events, surfaces enough info for the user to diagnose (timestamp, source_app, "decryption failed: no key" vs "decryption failed: wrong key") without leaking sensitive content.
 
 ## What this doc does not cover
 
-- The protocol itself — see `dayglance-intent-protocol.md`
-- Family-wide sequencing across apps — see `glance-family-roadmap.md`
-- Per-app integration details from the consumer's perspective — see each app's spec doc
-- The sync package precedent — see `@glance-apps/sync`'s own repo and docs
+- The protocol itself: see `dayglance-intent-protocol.md`
+- Family-wide sequencing across apps: see `glance-family-roadmap.md`
+- Per-app integration details from the consumer's perspective: see each app's spec doc
+- The sync package precedent: see `@glance-apps/sync`'s own repo and docs
