@@ -22,7 +22,7 @@ WebDAV is the transport that makes "complete a chore on my phone while away from
 
 ## Status
 
-**In active implementation.** The protocol is being implemented via a shared package, `@glance-apps/intents`, following the `@glance-apps/sync` extraction pattern. Schema decisions are locked.
+**In active implementation.** The protocol is implemented via a shared package, `@glance-apps/intents@1.3.2`, following the `@glance-apps/sync` extraction pattern. Schema decisions are locked.
 
 The WebDAV event log is the v1 cross-app transport for the GLANCE family. lastGLANCE ships against it. Android intents are an optimization that ships when Tasker support ships; not on the critical path for GLANCE-family integration.
 
@@ -95,6 +95,7 @@ Creates a task from any external source.
 | `recurring` | String | No | RRULE syntax or simplified shorthand (see below) |
 | `source_app` | String | No | Reverse-DNS id of the creating app (e.g. `app.lastglance`); enables `notify` events back |
 | `source_entity_id` | String | No | Opaque id meaningful to the source app; round-tripped in `notify` payloads. Requires `source_app`. |
+| `assigned_user_ids` | String[] | No | List of sync user IDs the task is assigned to; enables cross-app multi-user filtering. |
 
 **Behavior:**
 
@@ -213,6 +214,7 @@ dayGLANCE emits `notify` when a task with `source_app` set changes state. Consum
 | `due` | String | If applicable | Current `due` value; present on `rescheduled` and `updated` |
 | `previous_due` | String | If applicable | Prior `due` value; present on `rescheduled` |
 | `completed_at` | String | If applicable | Present on `completed`; equals `timestamp` |
+| `completed_by_user_id` | String | If applicable | Present on `completed`; sync ID of the user who completed the task. Enables receiving apps to attribute the completion. |
 
 **Events:**
 
