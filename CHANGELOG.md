@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.3.3] - 2026-06-07
+
+### Fixed
+
+- **`schemas/v1/create`** — `CreateSchema` now accepts the optional `entity_type` string field (already present on `NotifySchema`). The `.strict()` constraint was rejecting any create envelope that included `entity_type`, throwing `MalformedEnvelopeError`. dayGLANCE uses this field to distinguish `goal` vs `task` intents on creation.
+
 ## [1.3.2] - 2026-06-03
 
 ### Added

@@ -41,6 +41,7 @@ export const CreateSchema = z
     source_app: z.string().regex(sourceAppPattern).optional(),
     source_entity_id: z.string().min(1).optional(),
     assigned_user_ids: z.array(z.string()).optional(),
+    entity_type: z.string().min(1).optional(),
   })
   .strict()
   .refine((data) => data.duration === undefined || (!!data.due && hasTimeComponent(data.due)), {
