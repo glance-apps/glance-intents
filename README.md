@@ -203,7 +203,7 @@ Organized by module. Every named export is intentional and governed by semver.
 
 Flat: `CreateSchema`, `CompleteSchema`, `OpenSchema`, `QuerySchema`, `NotifySchema`, `EnvelopeSchema`, `EncryptedEnvelopeSchema`, plus inferred types `CreatePayload`, `CompletePayload`, `OpenPayload`, `QueryPayload`, `NotifyPayload`, `Envelope`, `EncryptedEnvelope`.
 
-`CreateSchema` optional fields: `title` (required), `due`, `duration`, `all_day`, `deadline`, `tags`, `priority`, `notes`, `project`, `recurring`, `source_app`, `source_entity_id`, `assigned_user_ids` (`string[]` — list of user IDs the task is assigned to, for cross-app multi-user filtering).
+`CreateSchema` optional fields: `title` (required), `due`, `duration`, `all_day`, `deadline`, `tags`, `priority`, `notes`, `project`, `recurring`, `source_app`, `source_entity_id`, `assigned_user_ids` (`string[]` — list of user IDs the task is assigned to, for cross-app multi-user filtering), `entity_type` (`string` — emitting app's classification of the intent, e.g. `"goal"` or `"task"`).
 
 `NotifySchema` optional fields include `completed_at` and `completed_by_user_id` (`string` — sync ID of the user who completed the task, for cross-app completion attribution).
 
