@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { base64ToUint8Array, uint8ArrayToBase64 } from '../crypto/aes-gcm.js';
 import {
   type EncryptedEnvelope,
   EncryptedEnvelopeSchema,
@@ -8,37 +9,44 @@ import {
 } from '../schemas/v1/index.js';
 
 // Any envelope the package can produce can ride the GLANCEvault transport,
-// plaintext or encrypted. The vault stores the whole envelope opaquely in its
-// `envelope` column; only the surrounding row fields (event_id, seq,
-// expires_at) are the vault's concern. This mirrors how the WebDAV codec
-// treats the envelope as the file body and `filenameFor` as the wrapper.
+// plaintext or encrypted. On the wire the envelope is an OPAQUE base64 string
+// (the server never looks inside it); the codec's API still takes and returns a
+// structured envelope object. This mirrors how the WebDAV codec treats the
+// envelope as the file body and `filenameFor` as the wrapper.
 export type IntentEnvelope = Envelope | EncryptedEnvelope;
 
 const intentEnvelopeSchema = z.union([EnvelopeSchema, EncryptedEnvelopeSchema]);
 
-// What a client POSTs to the vault to insert one intent. `account_id` and
-// `seq` are assigned by the server (`account_id` from auth, `seq` is the
-// monotonic per-account counter receivers cursor on), so they are absent from
-// the outbound shape. `event_id` is the client-generated idempotency key:
-// re-POSTing a row with the same event_id is a harmless no-op on the server.
-//
-// Note there is deliberately no `seq` here. Sending is structurally incapable
-// of carrying — let alone advancing — a receive cursor, because seq only ever
-// exists on the inbound row the server hands back. The cursor-split discipline
-// (a device that sends must still receive an unconsumed intent sitting below
-// the seq it just sent) lives in the app-owned transport, but the codec makes
-// the wrong shape unrepresentable in the first place.
+// The envelope crosses the wire as base64 of its UTF-8 JSON. TextEncoder /
+// TextDecoder keep non-ASCII payloads (emoji, accented titles) intact, which a
+// bare btoa/atob on the JSON string would corrupt.
+function encodeEnvelope(envelope: IntentEnvelope): string {
+  return uint8ArrayToBase64(new TextEncoder().encode(JSON.stringify(envelope)));
+}
+
+function decodeEnvelope(b64: string): unknown {
+  return JSON.parse(new TextDecoder().decode(base64ToUint8Array(b64)));
+}
+
+// One element of the `events` array a client POSTs to `POST /intents/batch`.
+// Field names are camelCase to match the server. `accountId` is NOT part of the
+// row — it is a top-level field of the batch body (app-owned scope), never per
+// row. `seq` is server-assigned and only appears on inbound rows, so a send is
+// structurally incapable of carrying — let alone advancing — a receive cursor.
+// `eventId` is the client-generated idempotency key lifted to the top level
+// (the server reads it from here, treating `envelope` as opaque): re-POSTing a
+// row with the same eventId is a harmless no-op.
 export interface OutboundIntentRow {
-  event_id: string;
-  envelope: IntentEnvelope;
-  expires_at: string;
+  eventId: string;
+  envelope: string;
+  expiresAt: string;
 }
 
 export const OutboundIntentRowSchema = z
   .object({
-    event_id: z.string().min(1),
-    envelope: intentEnvelopeSchema,
-    expires_at: z.string().datetime({ offset: true }),
+    eventId: z.string().min(1),
+    envelope: z.string().min(1),
+    expiresAt: z.string().datetime({ offset: true }),
   })
   .strict();
 
@@ -49,60 +57,71 @@ export const OutboundIntentRowSchema = z
 export type IntentRowTtl = { ttlMs: number } | { expiresAt: Date };
 
 export function buildIntentRow(envelope: IntentEnvelope, ttl: IntentRowTtl): OutboundIntentRow {
+  // Validate the structured input before encoding (defense in depth, mirroring
+  // buildEnvelope's round-trip): a non-envelope object is rejected here rather
+  // than silently base64-encoded into an opaque blob the server can't reject.
+  const validated = intentEnvelopeSchema.parse(envelope);
+
   const expiresAt =
     'expiresAt' in ttl
       ? ttl.expiresAt
-      : new Date(new Date(envelope.emitted_at).getTime() + ttl.ttlMs);
+      : new Date(new Date(validated.emitted_at).getTime() + ttl.ttlMs);
 
-  // Round-trip through the schema, mirroring buildEnvelope: validates the row
-  // shape (defense in depth) and hands back a properly-typed OutboundIntentRow.
   return OutboundIntentRowSchema.parse({
-    // event_id IS the envelope's event_id. Reusing it rather than minting a
-    // fresh one keeps the vault row's idempotency key aligned with the
-    // envelope's own id, so dedup is consistent across transports.
-    event_id: envelope.event_id,
-    envelope,
-    expires_at: expiresAt.toISOString(),
+    // Lift the envelope's own event_id to the top-level camelCase eventId so
+    // the server's idempotency key lines up with the envelope's id across
+    // transports.
+    eventId: validated.event_id,
+    envelope: encodeEnvelope(validated),
+    expiresAt: expiresAt.toISOString(),
   });
 }
 
-// One row as the vault returns it from a list-since-cursor read. `seq` is the
-// server-assigned monotonic position a receiver advances its cursor over;
-// `envelope` is returned opaque (route it to `parseEnvelope` or
-// `parseEncryptedEnvelope` based on its `encrypted` flag, exactly as a WebDAV
-// reader does after fetching a file).
+// One row as the vault returns it from `GET /intents/list`. Field names are
+// camelCase; the row does NOT carry account_id (scope only, never returned) and
+// DOES carry serverMtime. `envelope` is a base64 string on the wire. `seq` is
+// the server-assigned monotonic position a receiver advances its cursor over.
+//
+// `IntentEventRowSchema` validates the raw WIRE row (envelope as a base64
+// string). `parseIntentRow` decodes that string back into the envelope object,
+// so the returned `IntentEventRow.envelope` is the structured value the caller
+// routes to `parseEnvelope` / `parseEncryptedEnvelope` by its `encrypted` flag.
 export interface IntentEventRow {
-  account_id: string;
-  event_id: string;
-  seq: number;
+  eventId: string;
   envelope: unknown;
-  expires_at: string;
+  seq: number;
+  expiresAt: string;
+  serverMtime: string;
 }
 
 export const IntentEventRowSchema = z
   .object({
-    account_id: z.string().min(1),
-    event_id: z.string().min(1),
+    eventId: z.string().min(1),
+    envelope: z.string().min(1),
     seq: z.number().int().nonnegative(),
-    // Kept opaque on purpose: the codec doesn't decide plaintext vs encrypted
-    // here. The caller inspects `encrypted` and routes to the matching parser,
-    // mirroring the WebDAV read path. Requiring an object (not bare unknown)
-    // still rejects rows whose envelope column is null or a scalar.
-    envelope: z.record(z.string(), z.unknown()),
-    expires_at: z.string().datetime({ offset: true }),
+    expiresAt: z.string().datetime({ offset: true }),
+    serverMtime: z.string().datetime({ offset: true }),
   })
   .strict();
 
 export function parseIntentRow(raw: unknown): IntentEventRow {
-  return IntentEventRowSchema.parse(raw);
+  const wire = IntentEventRowSchema.parse(raw);
+  return {
+    eventId: wire.eventId,
+    // Decode the opaque wire string back into the structured envelope object.
+    envelope: decodeEnvelope(wire.envelope),
+    seq: wire.seq,
+    expiresAt: wire.expiresAt,
+    serverMtime: wire.serverMtime,
+  };
 }
 
-// Pure expiry check against `expires_at`. The vault prunes expired rows
+// Pure expiry check against `expiresAt`. The vault prunes expired rows
 // server-side, but redelivery can race a prune, so receivers can use this to
 // skip a row that is past its TTL but not yet swept. Works on either row shape.
 export function isExpired(
-  row: Pick<IntentEventRow, 'expires_at'>,
+  row: { expiresAt: string },
   now: Date = new Date(),
 ): boolean {
-  return Date.parse(row.expires_at) <= now.getTime();
+  return Date.parse(row.expiresAt) <= now.getTime();
 }

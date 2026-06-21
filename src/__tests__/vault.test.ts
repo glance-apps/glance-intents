@@ -19,11 +19,11 @@ const sampleNotifyPayload: NotifyPayload = {
   source_entity_id: 'chore_42',
   event: EVENTS.COMPLETED,
   task_id: 'tsk_8a91',
-  title: 'Replace HVAC filter',
+  title: 'Replace HVAC filter ☃️', // non-ASCII: proves UTF-8-safe base64.
   timestamp: '2026-05-17T14:30:22Z',
 };
 
-// A fixed emitted_at so expires_at math is deterministic in assertions.
+// A fixed emitted_at so expiresAt math is deterministic in assertions.
 const EMITTED_AT = new Date('2026-05-17T14:30:22.000Z');
 
 function notifyEnvelope() {
@@ -35,19 +35,33 @@ function notifyEnvelope() {
   });
 }
 
-describe('buildIntentRow (SEND)', () => {
-  it('builds an insert-only row carrying envelope, event_id, and expires_at', () => {
-    const envelope = notifyEnvelope();
-    const row = buildIntentRow(envelope, { ttlMs: 7 * 24 * 60 * 60 * 1000 });
+// Reconstruct the row the server stores then returns from a freshly built
+// outbound row: it keeps the base64 envelope and adds the server-assigned seq
+// and serverMtime. account_id is never returned (scope only).
+function asServerRow(out: OutboundIntentRow, seq = 42): unknown {
+  return {
+    eventId: out.eventId,
+    envelope: out.envelope,
+    seq,
+    expiresAt: out.expiresAt,
+    serverMtime: '2026-05-17T14:30:25.000Z',
+  };
+}
 
-    expect(row.event_id).toBe(envelope.event_id);
-    // Validated round-trip through the schema, so deep-equal (not identical).
-    expect(row.envelope).toEqual(envelope);
-    // emitted_at + 7d.
-    expect(row.expires_at).toBe('2026-05-24T14:30:22.000Z');
+describe('buildIntentRow (SEND) — camelCase + base64 wire shape', () => {
+  it('emits exactly { eventId, envelope, expiresAt } in camelCase', () => {
+    const row = buildIntentRow(notifyEnvelope(), { ttlMs: 7 * 24 * 60 * 60 * 1000 });
+    expect(Object.keys(row).sort()).toEqual(['envelope', 'eventId', 'expiresAt']);
+    // No snake_case, no seq, no accountId on an outbound row.
+    expect('event_id' in row).toBe(false);
+    expect('expires_at' in row).toBe(false);
+    expect('seq' in row).toBe(false);
+    expect('accountId' in row).toBe(false);
+    expect('account_id' in row).toBe(false);
+    expectTypeOf<OutboundIntentRow>().not.toHaveProperty('seq');
   });
 
-  it('uses the envelope event_id as the idempotency key (not a fresh id)', () => {
+  it('lifts the envelope event_id to the top-level eventId', () => {
     const envelope = buildEnvelope({
       action: ACTIONS.NOTIFY,
       payload: sampleNotifyPayload,
@@ -56,34 +70,67 @@ describe('buildIntentRow (SEND)', () => {
       eventId: '20260517T143022Z-abc123',
     });
     const row = buildIntentRow(envelope, { ttlMs: 1000 });
-    expect(row.event_id).toBe('20260517T143022Z-abc123');
+    expect(row.eventId).toBe('20260517T143022Z-abc123');
+    expect(row.eventId).toBe(envelope.event_id);
+  });
+
+  it('emits the envelope as a base64 STRING, not an object', () => {
+    const envelope = notifyEnvelope();
+    const row = buildIntentRow(envelope, { ttlMs: 1000 });
+    expect(typeof row.envelope).toBe('string');
+    // The base64 string decodes back to the original envelope JSON.
+    const decoded = JSON.parse(
+      new TextDecoder().decode(
+        Uint8Array.from(globalThis.atob(row.envelope), (c) => c.charCodeAt(0)),
+      ),
+    );
+    expect(decoded).toEqual(envelope);
+  });
+
+  it('computes expiresAt from emitted_at + ttlMs as an ISO string', () => {
+    const row = buildIntentRow(notifyEnvelope(), { ttlMs: 7 * 24 * 60 * 60 * 1000 });
+    expect(row.expiresAt).toBe('2026-05-24T14:30:22.000Z');
   });
 
   it('accepts an absolute expiresAt', () => {
     const row = buildIntentRow(notifyEnvelope(), {
       expiresAt: new Date('2026-06-01T00:00:00.000Z'),
     });
-    expect(row.expires_at).toBe('2026-06-01T00:00:00.000Z');
+    expect(row.expiresAt).toBe('2026-06-01T00:00:00.000Z');
   });
 
-  it('carries no seq: send cannot represent — let alone advance — a receive cursor', () => {
-    const row = buildIntentRow(notifyEnvelope(), { ttlMs: 1000 });
-    // The cursor-split discipline at the codec level: an outbound row has no
-    // seq and no account_id (server-assigned). seq lives only on inbound rows,
-    // so a send is structurally incapable of touching the receive cursor.
-    expect('seq' in row).toBe(false);
-    expect('account_id' in row).toBe(false);
-    expect(Object.keys(row).sort()).toEqual(['envelope', 'event_id', 'expires_at']);
-    expectTypeOf<OutboundIntentRow>().not.toHaveProperty('seq');
+  it('rejects a non-envelope input (defense in depth)', () => {
+    expect(() => buildIntentRow({ not: 'an envelope' } as never, { ttlMs: 1000 })).toThrow();
+  });
+});
+
+describe('SEND idempotency (re-send is a byte-identical no-op)', () => {
+  it('building the same envelope twice yields identical rows', () => {
+    const envelope = notifyEnvelope();
+    const a = buildIntentRow(envelope, { ttlMs: 1000 });
+    const b = buildIntentRow(envelope, { ttlMs: 1000 });
+    expect(a.eventId).toBe(b.eventId);
+    expect(a.envelope).toBe(b.envelope); // identical base64 string
+    expect(a.expiresAt).toBe(b.expiresAt);
+    expect(a).toEqual(b);
+  });
+});
+
+describe('round-trip through the base64 string boundary', () => {
+  it('build → server row → parse recovers the original envelope object', () => {
+    const envelope = notifyEnvelope();
+    const out = buildIntentRow(envelope, { ttlMs: 1000 });
+    const parsed = parseIntentRow(asServerRow(out, 99));
+
+    // The base64 wire envelope decodes back to the exact structured envelope.
+    expect(parsed.envelope).toEqual(envelope);
+    expect(parsed.eventId).toBe(envelope.event_id);
+    expect(parsed.seq).toBe(99);
+    expect(parsed.expiresAt).toBe(out.expiresAt);
+    expect(parsed.serverMtime).toBe('2026-05-17T14:30:25.000Z');
   });
 
-  it('rejects a non-envelope payload (defense in depth)', () => {
-    expect(() =>
-      buildIntentRow({ not: 'an envelope' } as never, { ttlMs: 1000 }),
-    ).toThrow();
-  });
-
-  it('round-trips an encrypted envelope opaquely', async () => {
+  it('round-trips an encrypted envelope opaquely through base64', async () => {
     const key = await globalThis.crypto.subtle.generateKey(
       { name: 'AES-GCM', length: 256 },
       true,
@@ -98,43 +145,46 @@ describe('buildIntentRow (SEND)', () => {
       },
       () => Promise.resolve(key),
     );
-    const row = buildIntentRow(encrypted, { ttlMs: 1000 });
-    expect(row.event_id).toBe(encrypted.event_id);
-    expect(row.envelope).toEqual(encrypted);
-  });
-});
-
-describe('SEND idempotency (re-send is a byte-identical no-op)', () => {
-  it('building the same envelope twice yields identical rows', () => {
-    const envelope = notifyEnvelope();
-    const a = buildIntentRow(envelope, { ttlMs: 1000 });
-    const b = buildIntentRow(envelope, { ttlMs: 1000 });
-    // Same event_id (server dedups on it) and same expires_at: re-POSTing this
-    // row is a harmless no-op.
-    expect(a.event_id).toBe(b.event_id);
-    expect(a.expires_at).toBe(b.expires_at);
-    expect(a).toEqual(b);
+    const out = buildIntentRow(encrypted, { ttlMs: 1000 });
+    expect(typeof out.envelope).toBe('string');
+    const parsed = parseIntentRow(asServerRow(out));
+    expect(parsed.envelope).toEqual(encrypted);
+    expect(parsed.eventId).toBe(encrypted.event_id);
   });
 });
 
 describe('parseIntentRow (RECEIVE)', () => {
   const validRow = {
-    account_id: 'acct_1',
-    event_id: '20260517T143022Z-abc123',
+    eventId: '20260517T143022Z-abc123',
+    envelope: globalThis.btoa(JSON.stringify({ schema_version: 1, action: 'notify' })),
     seq: 42,
-    envelope: { schema_version: 1, action: 'notify', event_id: 'x' },
-    expires_at: '2026-05-24T14:30:22.000Z',
+    expiresAt: '2026-05-24T14:30:22.000Z',
+    serverMtime: '2026-05-17T14:30:25.000Z',
   };
 
-  it('parses a row and exposes the server-assigned seq for cursor advance', () => {
+  it('ACCEPTS a base64-string envelope and decodes it', () => {
     const parsed = parseIntentRow(validRow);
+    expect(parsed.envelope).toEqual({ schema_version: 1, action: 'notify' });
     expect(parsed.seq).toBe(42);
-    expect(parsed.account_id).toBe('acct_1');
-    expect(parsed.event_id).toBe('20260517T143022Z-abc123');
-    // envelope stays opaque for the caller to route to the matching parser.
-    expect(parsed.envelope).toEqual(validRow.envelope);
+    expect(parsed.eventId).toBe('20260517T143022Z-abc123');
+    expect(parsed.serverMtime).toBe('2026-05-17T14:30:25.000Z');
     expectTypeOf(parsed.seq).toEqualTypeOf<number>();
     expectTypeOf(parsed.envelope).toEqualTypeOf<unknown>();
+  });
+
+  it('REJECTS a JSON-object envelope (the old wrong wire shape)', () => {
+    expect(() =>
+      parseIntentRow({ ...validRow, envelope: { schema_version: 1, action: 'notify' } }),
+    ).toThrow();
+  });
+
+  it('REJECTS a row carrying account_id (strict; server never returns it)', () => {
+    expect(() => parseIntentRow({ ...validRow, account_id: 'acct_1' })).toThrow();
+  });
+
+  it('rejects a missing serverMtime', () => {
+    const { serverMtime: _m, ...noMtime } = validRow;
+    expect(() => parseIntentRow(noMtime)).toThrow();
   });
 
   it('rejects a missing seq', () => {
@@ -146,41 +196,30 @@ describe('parseIntentRow (RECEIVE)', () => {
     expect(() => parseIntentRow({ ...validRow, seq: 4.2 })).toThrow();
   });
 
-  it('rejects a bad expires_at', () => {
-    expect(() => parseIntentRow({ ...validRow, expires_at: 'soon' })).toThrow();
-  });
-
-  it('rejects an envelope column that is not an object', () => {
-    expect(() => parseIntentRow({ ...validRow, envelope: 'nope' })).toThrow();
-  });
-
-  it('rejects unexpected extra fields (strict)', () => {
-    expect(() => parseIntentRow({ ...validRow, surprise: true })).toThrow();
+  it('rejects a bad expiresAt', () => {
+    expect(() => parseIntentRow({ ...validRow, expiresAt: 'soon' })).toThrow();
   });
 });
 
 describe('RECEIVE idempotency + TTL (redelivery within the window is harmless)', () => {
-  const inWindowRow: IntentEventRow = {
-    account_id: 'acct_1',
-    event_id: '20260517T143022Z-abc123',
+  const inWindowRow = {
+    eventId: '20260517T143022Z-abc123',
+    envelope: globalThis.btoa(JSON.stringify({ schema_version: 1, action: 'notify' })),
     seq: 42,
-    envelope: { schema_version: 1, action: 'notify' },
-    expires_at: '2026-05-24T14:30:22.000Z',
+    expiresAt: '2026-05-24T14:30:22.000Z',
+    serverMtime: '2026-05-17T14:30:25.000Z',
   };
 
-  it('repeated delivery of the same row yields the same event_id to dedup on', () => {
+  it('repeated delivery of the same row yields the same eventId to dedup on', () => {
     const first = parseIntentRow(inWindowRow);
     const second = parseIntentRow({ ...inWindowRow });
-    // The app dedups on event_id; redelivery of a not-yet-expired intent is a
-    // no-op because both deliveries carry the same key.
-    expect(first.event_id).toBe(second.event_id);
+    expect(first.eventId).toBe(second.eventId);
   });
 
   it('isExpired is false inside the TTL window and true past it', () => {
-    const beforeExpiry = new Date('2026-05-20T00:00:00.000Z');
-    const afterExpiry = new Date('2026-05-25T00:00:00.000Z');
-    expect(isExpired(inWindowRow, beforeExpiry)).toBe(false);
-    expect(isExpired(inWindowRow, afterExpiry)).toBe(true);
+    const row: Pick<IntentEventRow, 'expiresAt'> = { expiresAt: '2026-05-24T14:30:22.000Z' };
+    expect(isExpired(row, new Date('2026-05-20T00:00:00.000Z'))).toBe(false);
+    expect(isExpired(row, new Date('2026-05-25T00:00:00.000Z'))).toBe(true);
   });
 
   it('isExpired works on a freshly built outbound row too', () => {
@@ -209,7 +248,7 @@ describe('since-cursor parsing', () => {
     expect(() => parseSince('nope')).toThrow(RangeError);
   });
 
-  it('formats cursors for the since parameter, null → backlog', () => {
+  it('formats cursors for the since parameter, null → backlog (0)', () => {
     expect(formatSince(42)).toBe('42');
     expect(formatSince(0)).toBe('0');
     expect(formatSince(null)).toBe('0');
