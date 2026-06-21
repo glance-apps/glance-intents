@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.4.0] - 2026-06-21
+
+Adds GLANCEvault row codec helpers — the building blocks for a database-backed intents transport — alongside the existing WebDAV envelope helpers. Codec only: envelope-to-row encode/decode and since-cursor parsing, no HTTP/cursor/poller. The transport itself (HTTP, receive-cursor management, polling) stays app-owned, exactly like the WebDAV transport. WebDAV remains fully intact and the default; the vault helpers are additive and opt-in by import.
+
+### Added
+
+- **`vault/`** — `buildIntentRow(envelope, ttl)`: encodes any plaintext or encrypted envelope into the insert-only `intent_events` row a client POSTs to the vault (`event_id`, `envelope`, `expires_at`). The row's `event_id` is the envelope's own `event_id`, so re-POSTing is a harmless no-op the server dedups on. TTL is explicit (`{ ttlMs }`, computed from the envelope's `emitted_at` for a byte-identical idempotent re-send, or `{ expiresAt }`). The outbound row deliberately carries no `seq` — `seq` is server-assigned and exists only on inbound rows, so sending is structurally incapable of advancing a receive cursor.
+- **`vault/`** — `parseIntentRow(raw)`: validates a row returned from a list-since-cursor read (`account_id`, `event_id`, `seq`, `envelope`, `expires_at`) and exposes the server-assigned `seq` a receiver advances its cursor over. The `envelope` column is returned opaque; route it to `parseEnvelope` or `parseEncryptedEnvelope` based on its `encrypted` flag, exactly as the WebDAV read path does.
+- **`vault/`** — `isExpired(row, now?)`: pure TTL check against `expires_at`, for skipping a row that is past its window but not yet swept by the server's prune.
+- **`vault/`** — `parseSince(raw)` / `formatSince(cursor)`: parse and format the integer since-cursor used on the list request. Cursor persistence and advancement remain app-owned (the package holds no cursor state).
+- **`vault/`** — exported Zod schemas `OutboundIntentRowSchema`, `IntentEventRowSchema`, and types `IntentEnvelope`, `OutboundIntentRow`, `IntentEventRow`, `IntentRowTtl`.
+
 ## [1.3.3] - 2026-06-07
 
 ### Fixed

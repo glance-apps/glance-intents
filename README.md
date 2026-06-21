@@ -233,6 +233,28 @@ Plaintext: `buildEnvelope`, `parseEnvelope`, `filenameFor`, `parseFilename`. Typ
 
 Encrypted: `buildEncryptedEnvelope(args, deriveKey)`, `parseEncryptedEnvelope(raw, deriveKey)`. Both async. `deriveKey` has signature `(salt: Uint8Array<ArrayBuffer>) => Promise<CryptoKey>`; pass `(salt) => deriveEnvelopeKey(cachedRootKey, salt)` where `cachedRootKey` is the non-extractable HKDF key from `deriveIntentsRootKey`. A fresh random 16-byte salt is generated per envelope on build and embedded in the envelope header; the consumer extracts the salt and calls `deriveKey` to reconstruct the matching key. `buildEncryptedEnvelope` is generic over `EncryptableAction` (`'create' | 'notify'`). Types: `EncryptableAction`, `BuildEncryptedEnvelopeArgs`.
 
+### GLANCEvault row helpers
+
+The building blocks for a database-backed intents transport, parallel to the WebDAV envelope helpers. Same boundary: this package encodes/decodes the `intent_events` row and parses the cursor token; the HTTP client, the receive-cursor storage, and the polling loop stay app-side (just like the WebDAV poller and its localStorage/settings cursor).
+
+`buildIntentRow(envelope, ttl)`: encodes a plaintext or encrypted `Envelope` into the insert-only row a client POSTs to the vault — `{ event_id, envelope, expires_at }`. `event_id` is the envelope's own id (the idempotency key the server dedups on, so re-POSTing is a no-op). `ttl` is `{ ttlMs }` (expiry computed from the envelope's `emitted_at`, so a re-built row is byte-identical) or `{ expiresAt: Date }`. The outbound row has no `seq`: `seq` is server-assigned and appears only on inbound rows, so a send can never carry or advance a receive cursor.
+
+```typescript
+import { buildEnvelope, buildIntentRow } from '@glance-apps/intents';
+
+const envelope = buildEnvelope({ action: 'notify', emittedBy: 'app.dayglance', payload: { /* ... */ } });
+const row = buildIntentRow(envelope, { ttlMs: 7 * 24 * 60 * 60 * 1000 });
+await fetch(`${vaultUrl}/intent_events`, { method: 'POST', body: JSON.stringify(row) }); // app-owned I/O
+```
+
+`parseIntentRow(raw)`: validates a row from a list-since-cursor read — `{ account_id, event_id, seq, envelope, expires_at }`. The `envelope` column is returned opaque; route it to `parseEnvelope` or `parseEncryptedEnvelope` by its `encrypted` flag, exactly as the WebDAV read path does. `seq` is the value the receiver advances its cursor over.
+
+`isExpired(row, now?)`: pure check against `expires_at`, to skip a row past its TTL but not yet pruned server-side.
+
+`parseSince(raw)` / `formatSince(cursor)`: parse and format the integer since-cursor for the list request. `null` means "no cursor yet" (lists the full backlog). Cursor persistence and advancement are app-owned; the package holds no cursor state.
+
+Schemas: `OutboundIntentRowSchema`, `IntentEventRowSchema`. Types: `IntentEnvelope`, `OutboundIntentRow`, `IntentEventRow`, `IntentRowTtl`.
+
 ## Versioning
 
 The package version tracks the protocol's `schema_version` directly:
