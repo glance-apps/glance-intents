@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet. Future changes land here._
 
+## [1.5.0] - 2026-11-14
+
+Adds the task id a receiver gives the task it makes from a `create`, next to `createKey`, so every app derives it from one copy. Additive only: no change to the protocol, the schemas, or any existing export.
+
+### Added
+
+- **`idempotency/`**: `deterministicTaskId(seed)`, a deterministic UUID-shaped id from any seed string (its SHA-256, first 16 bytes, formatted as a version 4 UUID). Moved from dayGLANCE's `handleIntent`, byte-for-byte: the ids it makes are already in users' data, and the tests pin them.
+- **`idempotency/`**: `taskIdFor(source_app, source_entity_id, due)`, the id of the task a `create` makes: `deterministicTaskId(createKey(source_app, source_entity_id, due))`, with `due` normalized as for `createKey` (undefined for an undated create). A sender can name the task before the receiver has seen the intent: lastGLANCE's send-to-dayGLANCE returns it.
+
 ## [1.4.0] - 2026-06-21
 
 Adds GLANCEvault row codec helpers — the building blocks for a database-backed intents transport — alongside the existing WebDAV envelope helpers. Codec only: envelope-to-row encode/decode and since-cursor parsing, no HTTP/cursor/poller. The transport itself (HTTP, receive-cursor management, polling) stays app-owned, exactly like the WebDAV transport. WebDAV remains fully intact and the default; the vault helpers are additive and opt-in by import. The wire format matches the GLANCEvault `intents` endpoints: camelCase fields and an opaque base64-string envelope.

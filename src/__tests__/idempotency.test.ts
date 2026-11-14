@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { createKey, eventId } from '../idempotency/index.js';
+import { createKey, deterministicTaskId, eventId, taskIdFor } from '../idempotency/index.js';
 
 describe('eventId', () => {
   const EVENT_ID_RE = /^\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -144,5 +144,46 @@ describe('module-level concerns', () => {
     const b = await import('../idempotency/index.js');
     expect(a.eventId).toBe(b.eventId);
     expect(a.createKey).toBe(b.createKey);
+  });
+});
+
+describe('deterministicTaskId / taskIdFor', () => {
+  // Ids dayGLANCE's handleIntent produced before this moved here (its own
+  // deterministicTaskId over createKey, 2026-11-14). These ids are in users'
+  // data: if one of these changes, a re-delivered create makes a duplicate.
+  const CHORE = '33333333-3333-3333-3333-333333333333';
+  const LASTGLANCE = 'app.lastglance';
+
+  it('matches the ids already in use for a timed, an all-day and an inbox create', async () => {
+    expect(await taskIdFor(LASTGLANCE, CHORE, '2026-11-15T09:00:00-07:00')).toBe(
+      'fd071633-95dc-4088-a29f-6ccd56ea72e1',
+    );
+    expect(await taskIdFor(LASTGLANCE, CHORE, '2026-11-15')).toBe(
+      'ad49bb95-aaa1-4dd1-9fa5-14d82a98362f',
+    );
+    expect(await taskIdFor(LASTGLANCE, CHORE, undefined)).toBe(
+      'f25285b0-e601-4900-bbea-c4a8c8915b5f',
+    );
+  });
+
+  it('is deterministicTaskId over createKey', async () => {
+    const key = await createKey(LASTGLANCE, CHORE, '2026-11-15');
+    expect(await deterministicTaskId(key)).toBe(await taskIdFor(LASTGLANCE, CHORE, '2026-11-15'));
+  });
+
+  it('gives a version 4 UUID, the same for the same seed, different for another', async () => {
+    const a = await deterministicTaskId('seed-a');
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(await deterministicTaskId('seed-a')).toBe(a);
+    expect(await deterministicTaskId('seed-b')).not.toBe(a);
+  });
+
+  it('keeps a due with a time distinct from the same date all day, and from no due', async () => {
+    const ids = new Set([
+      await taskIdFor(LASTGLANCE, CHORE, '2026-11-15T09:00:00-07:00'),
+      await taskIdFor(LASTGLANCE, CHORE, '2026-11-15'),
+      await taskIdFor(LASTGLANCE, CHORE, undefined),
+    ]);
+    expect(ids.size).toBe(3);
   });
 });
