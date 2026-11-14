@@ -191,6 +191,21 @@ const key = await createKey('app.lastglance', 'chore_42', '2026-05-20');
 
 `createKey` is async (Web Crypto); `eventId` is sync. Inputs to `createKey` are expected to be already-normalized — the handler composes `normalizeDue` → `createKey`.
 
+The receiver makes the task's id from the same key, so every device that processes the create (and the app that sent it) arrives at the same id:
+
+```typescript
+import { deterministicTaskId, taskIdFor } from '@glance-apps/intents';
+
+// deterministicTaskId(createKey('app.lastglance', 'chore_42', '2026-05-20')), in one call.
+const taskId = await taskIdFor('app.lastglance', 'chore_42', '2026-05-20');
+// → a version 4 UUID, the same on every device
+
+// Or from any other seed (an event_id, say), the same way.
+const fromEvent = await deterministicTaskId('20260517T143022Z-7f3a9c');
+```
+
+These ids are stored in users' data: the output of both is fixed, and the tests pin it.
+
 ## Public API
 
 Organized by module. Every named export is intentional and governed by semver.
@@ -215,7 +230,7 @@ Versioned: `schemas.v1.*` for the same surface, so consumers that explicitly pin
 
 ### Idempotency
 
-`eventId(now?)`, `createKey(source_app, source_entity_id, due)`.
+`eventId(now?)`, `createKey(source_app, source_entity_id, due)`, `deterministicTaskId(seed)`, `taskIdFor(source_app, source_entity_id, due)`.
 
 ### Crypto helpers
 
